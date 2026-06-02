@@ -9,11 +9,11 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Usage: /category <type>\n\n"
             "Available categories:\n"
-            "• buy_candidate — strong fundamentals + price drop + oversold\n"
-            "• take_profit — strong fundamentals + price rise + overbought\n"
-            "• strong_watch — strong fundamentals, neutral price\n"
-            "• approaching_buy — strong fundamentals, price dropping\n"
-            "• traps — weak fundamentals with extreme price action\n\n"
+            "• buy_candidate — strong fundamentals + significant drop + oversold (act now)\n"
+            "• approaching_buy — strong fundamentals + moderate drop (getting close)\n"
+            "• strong_watch — strong fundamentals, neutral price (waiting for opportunity)\n"
+            "• take_profit — strong fundamentals + overbought (consider locking in gains)\n"
+            "• traps — weak fundamentals with extreme price action (avoid these)\n\n"
             "Example: /category strong_watch"
         )
         return
