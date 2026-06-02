@@ -6,20 +6,12 @@ from handlers.scan_commands import get_all_tickers
 
 async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text(
-            "Usage: /category <type>\n\n"
-            "Available categories:\n"
-            "• buy_candidate — strong fundamentals + significant drop + oversold (act now)\n"
-            "• approaching_buy — strong fundamentals + moderate drop (getting close)\n"
-            "• strong_watch — strong fundamentals, neutral price (waiting for opportunity)\n"
-            "• take_profit — strong fundamentals + overbought (consider locking in gains)\n"
-            "• traps — weak fundamentals with extreme price action (avoid these)\n\n"
-            "Example: /category strong_watch"
-        )
+        # ... existing help message ...
         return
 
-    cat_arg = context.args[0].lower()
+    from cache import get_by_category, get_cache_age, get_cached_results
 
+    cat_arg = context.args[0].lower()
     category_map = {
         'buy_candidate': ('main', 'BUY CANDIDATE'),
         'take_profit': ('main', 'MOMENTUM CONFIRMED'),
@@ -29,35 +21,32 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     if cat_arg not in category_map:
-        await update.message.reply_text(
-            f"Unknown category '{cat_arg}'. Run /category for help."
-        )
+        await update.message.reply_text(f"Unknown category '{cat_arg}'.")
         return
 
     target_category, target_signal = category_map[cat_arg]
 
-    await update.message.reply_text(f"🔍 Finding all {cat_arg} stocks... 3-4 min.")
+    # check cache age
+    age = get_cache_age()
+    if age is None:
+        await update.message.reply_text(
+            "⏳ Cache is being built for the first time. Try again in a few minutes."
+        )
+        return
 
-    tickers = get_all_tickers()
-    from fundamentals.sector_benchmarks import build_sector_benchmarks, _sector_cache
-    if not _sector_cache:
-        build_sector_benchmarks(tickers)
+    results = get_by_category(target_category, target_signal)
 
-    results = scan_tickers_parallel(tickers, max_workers=15, categories=[target_category])
-
-    # filter by specific signal name if needed
-    if target_signal:
-        if isinstance(target_signal, list):
-            results = [r for r in results if r['signal'] in target_signal]
-        else:
-            results = [r for r in results if r['signal'] == target_signal]
+    age_min = age // 60
 
     if not results:
-        await update.message.reply_text(f"No stocks currently in {cat_arg}.")
+        await update.message.reply_text(
+            f"No stocks currently in {cat_arg}. (Cache: {age_min} min old)"
+        )
         return
 
     messages = [r['message'] for r in results]
     chunks = [messages[i:i + 5] for i in range(0, len(messages), 5)]
     for i, chunk in enumerate(chunks):
-        header = f"📋 {cat_arg.upper()} ({len(messages)} found):\n\n" if i == 0 else ""
+        header = f"📋 {cat_arg.upper()} ({len(messages)} found, cache {age_min} min old):\n\n" if i == 0 else ""
         await update.message.reply_text(header + "\n".join(chunk))
+        
