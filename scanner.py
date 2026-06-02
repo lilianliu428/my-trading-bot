@@ -1,11 +1,21 @@
 import yfinance as yf
-import pandas_ta as ta
 import requests
 import time
 from fundamentals import check_fundamentals
 from config import (DROP_THRESHOLD, RISE_THRESHOLD,
                     RSI_OVERSOLD, RSI_OVERBOUGHT, FUNDAMENTAL_MIN_SCORE)
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+class ta:
+    @staticmethod
+    def rsi(close, length=14):
+        delta = close.diff()
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        avg_gain = gain.rolling(window=length).mean()
+        avg_loss = loss.rolling(window=length).mean()
+        rs = avg_gain / avg_loss
+        return 100 - (100 / (1 + rs))
 
 def get_all_tickers():
     import pandas as pd
@@ -75,7 +85,7 @@ def analyze_stock(ticker):
 
     if hist is None or hist.empty or len(hist) < 15:
         return None
-    
+
     try:
 
         hist["RSI"] = ta.rsi(hist["Close"], length=14)
