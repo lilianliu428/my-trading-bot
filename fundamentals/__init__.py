@@ -1,0 +1,1 @@
+from fundamentals.scorer import check_fundamentals
