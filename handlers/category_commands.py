@@ -49,4 +49,3 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, chunk in enumerate(chunks):
         header = f"📋 {cat_arg.upper()} ({len(messages)} found, cache {age_min} min old):\n\n" if i == 0 else ""
         await update.message.reply_text(header + "\n".join(chunk))
-        

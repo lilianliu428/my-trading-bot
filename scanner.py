@@ -151,7 +151,7 @@ def analyze_stock(ticker):
         return None
 
 
-def scan_tickers_parallel(tickers, max_workers=15, categories=None):
+def scan_tickers_parallel(tickers, max_workers=8, categories=None):
     """
     Scan tickers in parallel.
     categories: list of categories to keep. None = only main signals (default).
@@ -173,6 +173,6 @@ def scan_tickers_parallel(tickers, max_workers=15, categories=None):
                     results.append(result)
 
         if i + batch_size < len(tickers):
-            time.sleep(1.5)
+            time.sleep(3)
 
     return results

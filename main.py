@@ -34,5 +34,5 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 app.add_handler(CommandHandler("category", category_command))
 
 print("Bot is running...")
-print("Commands: /add | /remove | /list | /scan | /screen | /search")
+print("Commands: /add | /remove | /list | /scan | /screen | /search |/category")
 app.run_polling()
