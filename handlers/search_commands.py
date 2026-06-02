@@ -3,7 +3,17 @@ from telegram.ext import ContextTypes
 from scanner import analyze_stock
 from fundamentals import check_fundamentals
 import yfinance as yf
-import pandas_ta as ta
+
+class ta:
+    @staticmethod
+    def rsi(close, length=14):
+        delta = close.diff()
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        avg_gain = gain.rolling(window=length).mean()
+        avg_loss = loss.rolling(window=length).mean()
+        rs = avg_gain / avg_loss
+        return 100 - (100 / (1 + rs))
 
 async def search_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
