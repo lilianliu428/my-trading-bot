@@ -62,6 +62,7 @@ def get_all_tickers():
     print(f"Total unique tickers: {len(tickers)}")
     return tickers
 
+
 def analyze_stock(ticker):
     import time
 
@@ -87,7 +88,6 @@ def analyze_stock(ticker):
         return None
 
     try:
-
         hist["RSI"] = ta.rsi(hist["Close"], length=14)
         latest_rsi = hist["RSI"].iloc[-1]
         current_price = hist["Close"].iloc[-1]
@@ -97,14 +97,13 @@ def analyze_stock(ticker):
         drop_pct = ((current_price - high_30d) / high_30d) * 100
         rise_pct = ((current_price - low_30d) / low_30d) * 100
 
-        # fetch enough history for moving averages
-        hist_full = stock.history(period="1y")
-        fund_score, max_score, core_passed, fund_reasons = check_fundamentals(ticker, hist_full)
+        fund_score, max_score, core_passed, fund_reasons = check_fundamentals(ticker, hist)
         strong = core_passed == 5 or fund_score >= FUNDAMENTAL_MIN_SCORE
 
         signal = None
         emoji = ""
 
+        # main signals (act-now)
         if drop_pct < DROP_THRESHOLD and latest_rsi < RSI_OVERSOLD:
             signal = "BUY CANDIDATE" if strong else "POTENTIAL TRAP"
             emoji = "🔍" if strong else "⚠️"
@@ -113,11 +112,30 @@ def analyze_stock(ticker):
             signal = "MOMENTUM CONFIRMED" if strong else "TAKE PROFIT / AVOID"
             emoji = "🚀" if strong else "📈"
 
+        # warm zone signals (watch-only)
+        elif strong and drop_pct < -3 and latest_rsi < 50:
+            signal = "APPROACHING BUY"
+            emoji = "👀"
+
+        elif strong and abs(drop_pct) < 3 and 40 < latest_rsi < 60:
+            signal = "STRONG WATCH"
+            emoji = "📋"
+
         if not signal:
             return None
 
+        # categorize for filtering
+        if signal in ("BUY CANDIDATE", "POTENTIAL TRAP", "MOMENTUM CONFIRMED", "TAKE PROFIT / AVOID"):
+            category = "main"
+        elif signal == "APPROACHING BUY":
+            category = "approaching_buy"
+        elif signal == "STRONG WATCH":
+            category = "strong_watch"
+        else:
+            category = "other"
+
         fund_summary = "\n".join(fund_reasons)
-        return (
+        message = (
             f"{emoji} {signal}: {ticker}\n"
             f"Price: ${current_price:.2f}\n"
             f"RSI: {latest_rsi:.1f}\n"
@@ -126,40 +144,35 @@ def analyze_stock(ticker):
             f"{fund_summary}\n"
         )
 
+        return {"message": message, "category": category, "signal": signal, "ticker": ticker}
+
     except Exception as e:
         print(f"Error analyzing {ticker}: {e}")
         return None
 
 
-def scan_tickers_parallel(tickers, max_workers=20):
+def scan_tickers_parallel(tickers, max_workers=15, categories=None):
+    """
+    Scan tickers in parallel.
+    categories: list of categories to keep. None = only main signals (default).
+    Examples: ['main'], ['strong_watch'], ['main', 'approaching_buy']
+    """
+    if categories is None:
+        categories = ['main']
+
     results = []
-    completed = 0
-    total = len(tickers)
-
-    # split into batches to avoid rate limiting
     batch_size = 50
-    batches = [tickers[i:i + batch_size] for i in range(0, total, batch_size)]
 
-    for batch in batches:
+    for i in range(0, len(tickers), batch_size):
+        batch = tickers[i:i + batch_size]
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_ticker = {
-                executor.submit(analyze_stock, ticker): ticker
-                for ticker in batch
-            }
-            for future in as_completed(future_to_ticker):
-                ticker = future_to_ticker[future]
-                completed += 1
-                if completed % 50 == 0:
-                    print(f"Progress: {completed}/{total} stocks scanned")
-                try:
-                    result = future.result()
-                    if result:
-                        results.append(result)
-                except Exception as e:
-                    print(f"Error with {ticker}: {e}")
+            futures = {executor.submit(analyze_stock, ticker): ticker for ticker in batch}
+            for future in as_completed(futures):
+                result = future.result()
+                if result and result['category'] in categories:
+                    results.append(result)
 
-        # pause between batches so Yahoo Finance doesn't block us
-        print(f"Batch done, pausing...")
-        time.sleep(1.5)
+        if i + batch_size < len(tickers):
+            time.sleep(1.5)
 
     return results

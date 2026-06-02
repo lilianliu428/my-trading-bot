@@ -2,7 +2,8 @@ from telegram.ext import Application, MessageHandler, CommandHandler, filters
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from handlers import (add_stock, remove_stock, list_stocks,
                       scan_now, screen_all, handle_message,
-                      scan_watchlist_and_send, search_stock)
+                      scan_watchlist_and_send, search_stock,
+                      category_command)
 from config import TOKEN
 
 async def post_init(application):
@@ -20,6 +21,7 @@ app.add_handler(CommandHandler("scan", scan_now))
 app.add_handler(CommandHandler("screen", screen_all))
 app.add_handler(CommandHandler("search", search_stock))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+app.add_handler(CommandHandler("category", category_command))
 
 print("Bot is running...")
 print("Commands: /add | /remove | /list | /scan | /screen | /search")
