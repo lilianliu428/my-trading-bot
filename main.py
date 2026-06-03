@@ -1,13 +1,23 @@
 from telegram.ext import Application, MessageHandler, CommandHandler, filters
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from handlers import (add_stock, remove_stock, list_stocks,
-                      scan_now, screen_all, handle_message,
-                      scan_watchlist_and_send, search_stock,
-                      category_command)
+from bot.commands import (add_stock, remove_stock, list_stocks,
+                         scan_now, screen_all, handle_message,
+                         scan_watchlist_and_send, search_stock,
+                         category_command)
 from config import TOKEN
+from telegram import BotCommand
 
 
 async def post_init(application):
+    await application.bot.set_my_commands([
+        BotCommand("search", "Search a single stock (live)"),
+        BotCommand("screen", "Scan all S&P 500 for signals"),
+        BotCommand("category", "View stocks by signal category"),
+        BotCommand("scan", "Scan your watchlist"),
+        BotCommand("add", "Add ticker to watchlist"),
+        BotCommand("remove", "Remove ticker from watchlist"),
+        BotCommand("list", "Show your watchlist"),
+    ])
     # initial cache build in background (don't block startup)
     from cache import refresh_cache
     import threading

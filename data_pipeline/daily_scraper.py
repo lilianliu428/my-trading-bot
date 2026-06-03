@@ -7,11 +7,11 @@ from datetime import datetime, timedelta
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from config import ALPACA_API_KEY, ALPACA_SECRET
-from database import DB_PATH
+from config import ALPACA_API_KEY, ALPACA_API_SECRET
+from data_pipeline.database import DB_PATH
 
 # Initialize Alpaca client once
-client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET)
+client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_API_SECRET)
 
 
 def fetch_bars_for_tickers(tickers, days=350):
@@ -115,7 +115,7 @@ def run_daily_scrape(tickers):
 
 
 if __name__ == "__main__":
-    from scanner import get_all_tickers
+    from ticker_universe import get_all_tickers
 
     all_tickers = get_all_tickers()
     print(f"Loaded {len(all_tickers)} unique tickers")

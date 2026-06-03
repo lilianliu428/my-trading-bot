@@ -1,7 +1,7 @@
 import yfinance as yf
 import requests
 import time
-from fundamentals import check_fundamentals
+from scoring.scorer import check_fundamentals
 from config import (DROP_THRESHOLD, RISE_THRESHOLD,
                     RSI_OVERSOLD, RSI_OVERBOUGHT, FUNDAMENTAL_MIN_SCORE)
 from concurrent.futures import ThreadPoolExecutor, as_completed

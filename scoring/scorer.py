@@ -1,11 +1,11 @@
 import yfinance as yf
-from fundamentals.financial_health import (
+from scoring.metrics.financial_health import (
     check_revenue_growth, check_free_cash_flow, check_pe_ratio,
     check_earnings_growth, check_debt_equity
 )
-from fundamentals.profitability import check_operating_margin, check_roe
-from fundamentals.ownership import check_institutional_ownership, check_insider_ownership
-from fundamentals.technical_indicators import (
+from scoring.metrics.profitability import check_operating_margin, check_roe
+from scoring.metrics.ownership import check_institutional_ownership, check_insider_ownership
+from scoring.technical.indicators import (
     check_above_200ma, check_golden_cross, check_distance_from_200ma
 )
 

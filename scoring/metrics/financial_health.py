@@ -1,4 +1,4 @@
-from fundamentals.sector_benchmarks import get_sector_benchmark
+from scoring.sectors.benchmarks import get_sector_benchmark
 
 def check_revenue_growth(info):
     rev = info.get("revenueGrowth", None)

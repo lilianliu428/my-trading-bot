@@ -1,7 +1,5 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from scanner import scan_tickers_parallel
-from handlers.scan_commands import get_all_tickers
 
 
 async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -9,7 +7,7 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ... existing help message ...
         return
 
-    from cache import get_by_category, get_cache_age, get_cached_results
+    from cache import get_by_category, get_cache_age
 
     cat_arg = context.args[0].lower()
     category_map = {

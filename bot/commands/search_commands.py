@@ -8,7 +8,7 @@ from alpaca.data.timeframe import TimeFrame
 from config import (ALPACA_API_KEY, ALPACA_API_SECRET,
                     DROP_THRESHOLD, RISE_THRESHOLD,
                     RSI_OVERSOLD, RSI_OVERBOUGHT, FUNDAMENTAL_MIN_SCORE)
-from fundamentals import check_fundamentals
+from scoring.scorer import check_fundamentals
 
 # Initialize Alpaca client once
 alpaca_client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_API_SECRET)

@@ -1,7 +1,7 @@
 import threading
 import time
-from scanner import scan_tickers_parallel, get_all_tickers
-from fundamentals.sector_benchmarks import build_sector_benchmarks, _sector_cache
+from data_pipeline.ticker_universe import scan_tickers_parallel, get_all_tickers
+from scoring.sectors.benchmarks import build_sector_benchmarks, _sector_cache
 
 _results_cache = []
 _last_updated = 0

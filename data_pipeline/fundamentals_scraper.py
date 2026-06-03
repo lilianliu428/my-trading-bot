@@ -7,7 +7,7 @@ import time
 import sqlite3
 import yfinance as yf
 from datetime import datetime
-from database import DB_PATH
+from data_pipeline.database import DB_PATH
 
 
 def fetch_fundamentals(ticker):
@@ -55,7 +55,7 @@ def save_fundamentals(ticker, data):
 
 
 if __name__ == "__main__":
-    from scanner import get_all_tickers
+    from ticker_universe import get_all_tickers
 
     tickers = get_all_tickers()
     print(f"Scraping fundamentals for {len(tickers)} tickers...")

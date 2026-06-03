@@ -1,7 +1,7 @@
 from telegram import Update, Bot
 from telegram.ext import ContextTypes
 from watchlist import load_watchlist
-from scanner import scan_tickers_parallel, get_all_tickers
+from data_pipeline.ticker_universe import scan_tickers_parallel, get_all_tickers
 from config import TOKEN, YOUR_CHAT_ID
 
 
@@ -26,7 +26,7 @@ async def scan_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def screen_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tickers = get_all_tickers()
 
-    from fundamentals.sector_benchmarks import build_sector_benchmarks, _sector_cache
+    from scoring.sectors.benchmarks import build_sector_benchmarks, _sector_cache
     if not _sector_cache:
         await update.message.reply_text(
             "🔍 Building sector benchmarks (first run only)... about 1-2 minutes."
