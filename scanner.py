@@ -32,11 +32,12 @@ def get_all_tickers():
         print(f"S&P 500 failed: {e}")
 
         # S&P MidCap 400
+    # S&P MidCap 400
     try:
-        url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
-        # Wikipedia is more reliable for MidCap
         midcap_url = "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"
-        midcap_df = pd.read_html(midcap_url)[0]
+        headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+        response = requests.get(midcap_url, headers=headers)
+        midcap_df = pd.read_html(response.text)[0]
         midcap = midcap_df['Symbol'].tolist()
         all_tickers.update(midcap)
         print(f"Added {len(midcap)} S&P MidCap 400 tickers")
