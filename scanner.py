@@ -31,6 +31,18 @@ def get_all_tickers():
     except Exception as e:
         print(f"S&P 500 failed: {e}")
 
+        # S&P MidCap 400
+    try:
+        url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
+        # Wikipedia is more reliable for MidCap
+        midcap_url = "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"
+        midcap_df = pd.read_html(midcap_url)[0]
+        midcap = midcap_df['Symbol'].tolist()
+        tickers.update(midcap)
+        print(f"Added {len(midcap)} S&P MidCap 400 tickers")
+    except Exception as e:
+        print(f"Error loading MidCap 400: {e}")
+
     # NASDAQ 100 only — not all 3000
     nasdaq100 = [
         "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "GOOGL", "GOOG",
@@ -57,6 +69,30 @@ def get_all_tickers():
     ]
     all_tickers.update(dow30)
     print(f"Added Dow Jones 30")
+
+    # Major sector ETFs (for market regime + benchmarking)
+    etfs = [
+        "SPY",  # S&P 500
+        "QQQ",  # NASDAQ 100
+        "IWM",  # Russell 2000
+        "DIA",  # Dow Jones
+        "XLF",  # Financials
+        "XLE",  # Energy
+        "XLK",  # Technology
+        "XLV",  # Healthcare
+        "XLY",  # Consumer Discretionary
+        "XLP",  # Consumer Staples
+        "XLI",  # Industrials
+        "XLU",  # Utilities
+        "XLB",  # Materials
+        "XLRE",  # Real Estate
+        "XLC",  # Communication Services
+        "VTI",  # Total US Market
+        "VOO",  # S&P 500 alt
+        "VXUS",  # International
+    ]
+    all_tickers.update(etfs)
+    print(f"Added {len(etfs)} major ETFs")
 
     tickers = list(all_tickers)
     print(f"Total unique tickers: {len(tickers)}")
