@@ -18,3 +18,4 @@ watchlist.json
 # IDE
 .idea/
 .vscode/
+data.db
