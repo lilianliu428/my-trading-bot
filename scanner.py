@@ -31,18 +31,6 @@ def get_all_tickers():
     except Exception as e:
         print(f"S&P 500 failed: {e}")
 
-        # S&P MidCap 400
-    # S&P MidCap 400
-    try:
-        midcap_url = "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"
-        headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
-        response = requests.get(midcap_url, headers=headers)
-        midcap_df = pd.read_html(response.text)[0]
-        midcap = midcap_df['Symbol'].tolist()
-        all_tickers.update(midcap)
-        print(f"Added {len(midcap)} S&P MidCap 400 tickers")
-    except Exception as e:
-        print(f"Error loading MidCap 400: {e}")
 
     # NASDAQ 100 only — not all 3000
     nasdaq100 = [
