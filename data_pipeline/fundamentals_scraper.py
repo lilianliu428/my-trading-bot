@@ -55,8 +55,7 @@ def save_fundamentals(ticker, data):
 
 
 if __name__ == "__main__":
-    from ticker_universe import get_all_tickers
-
+    from data_pipeline.ticker_universe import get_all_tickers
     tickers = get_all_tickers()
     print(f"Scraping fundamentals for {len(tickers)} tickers...")
     print(f"⏱️  Expected duration: {len(tickers) * 3 / 60:.0f} minutes\n")

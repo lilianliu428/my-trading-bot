@@ -115,8 +115,7 @@ def run_daily_scrape(tickers):
 
 
 if __name__ == "__main__":
-    from ticker_universe import get_all_tickers
-
+    from data_pipeline.ticker_universe import get_all_tickers
     all_tickers = get_all_tickers()
     print(f"Loaded {len(all_tickers)} unique tickers")
 
