@@ -38,7 +38,7 @@ def get_all_tickers():
         midcap_url = "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"
         midcap_df = pd.read_html(midcap_url)[0]
         midcap = midcap_df['Symbol'].tolist()
-        tickers.update(midcap)
+        all_tickers.update(midcap)
         print(f"Added {len(midcap)} S&P MidCap 400 tickers")
     except Exception as e:
         print(f"Error loading MidCap 400: {e}")
