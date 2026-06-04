@@ -3,7 +3,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from bot.commands import (add_stock, remove_stock, list_stocks,
                          scan_now, screen_all, handle_message,
                          scan_watchlist_and_send, search_stock,
-                         category_command)
+                         category_command, similar_command)
 from config import TOKEN
 from telegram import BotCommand
 
@@ -33,7 +33,8 @@ app.add_handler(CommandHandler("screen", screen_all))
 app.add_handler(CommandHandler("search", search_stock))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 app.add_handler(CommandHandler("category", category_command))
+app.add_handler(CommandHandler("similar", similar_command))
 
 print("Bot is running...")
-print("Commands: /add | /remove | /list | /scan | /screen | /search |/category")
+print("Commands: /add | /remove | /list | /scan | /screen | /search | /category | /similar")
 app.run_polling()
