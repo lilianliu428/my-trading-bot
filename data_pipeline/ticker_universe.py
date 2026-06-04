@@ -68,6 +68,7 @@ def get_all_tickers():
         "XLF",  # Financials
         "XLE",  # Energy
         "XLK",  # Technology
+        "SOXX",  # Semiconductors (used for chip cycle context)
         "XLV",  # Healthcare
         "XLY",  # Consumer Discretionary
         "XLP",  # Consumer Staples
@@ -221,21 +222,13 @@ def analyze_stock_from_db(tickers, categories=None):
     DB_PATH = "/home/ubuntu/my-trading-bot/data.db"
     client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_API_SECRET)
 
-    # Load all fundamentals from DB into memory (one query, fast)
+    # Load all fundamentals from DB into memory as dicts
+    from scoring.dispatcher import score_row
     conn = sqlite3.connect(DB_PATH)
-    fund_rows = conn.execute("""
-        SELECT ticker, sector, pe, op_margin, roe, revenue_growth, earnings_growth,
-               debt_equity, free_cash_flow_positive, institutional_ownership, insider_ownership
-        FROM fundamentals
-    """).fetchall()
-
-    bmark_rows = conn.execute("""
-        SELECT sector, pe_median, op_margin_median, roe_median FROM sector_benchmarks
-    """).fetchall()
+    conn.row_factory = sqlite3.Row
+    fund_rows = conn.execute("SELECT * FROM fundamentals").fetchall()
     conn.close()
-
-    fund_map = {row[0]: row[1:] for row in fund_rows}
-    bmark_map = {row[0]: row[1:] for row in bmark_rows}
+    fund_map = {row["ticker"]: dict(row) for row in fund_rows}
 
     def score_from_db(ticker, current_price=None, ma_20=None, ma_50=None, ma_200=None):
         row = fund_map.get(ticker)
@@ -372,8 +365,24 @@ def analyze_stock_from_db(tickers, categories=None):
                     except:
                         pass
 
-                    fund_score, max_score, core_passed, fund_reasons = score_from_db(ticker, current_price, ma_20, ma_50, ma_200)
-                    strong = core_passed == 5 or fund_score >= FUNDAMENTAL_MIN_SCORE
+                    row_dict = fund_map.get(ticker)
+                    if row_dict is None:
+                        continue
+                    fund_score, max_score, all_cores_passed, fund_reasons, bucket = score_row(row_dict)
+                    strong = all_cores_passed or fund_score >= FUNDAMENTAL_MIN_SCORE
+
+                    # Add MA trend context (the existing ma_20, ma_50, ma_200 from snapshots)
+                    if current_price is not None and ma_200 is not None:
+                        dist = ((current_price - ma_200) / ma_200) * 100
+                        if current_price > ma_200:
+                            fund_reasons.append(f"📈 Above 200MA (+{dist:.1f}%)")
+                        else:
+                            fund_reasons.append(f"📉 Below 200MA ({dist:.1f}%)")
+                    if ma_50 is not None and ma_200 is not None:
+                        if ma_50 > ma_200:
+                            fund_reasons.append(f"📈 Golden cross (uptrend)")
+                        else:
+                            fund_reasons.append(f"📉 Death cross (downtrend)")
 
                     signal = None; emoji = ""
                     if drop_pct < DROP_THRESHOLD and rsi < RSI_OVERSOLD:
@@ -403,10 +412,11 @@ def analyze_stock_from_db(tickers, categories=None):
                     fund_summary = "\n".join(fund_reasons)
                     message = (
                         f"{emoji} {signal}: {ticker}\n"
+                        f"Bucket: {bucket}\n"
                         f"Price: ${current_price:.2f}\n"
                         f"RSI: {rsi:.1f}\n"
                         f"Drop: {drop_pct:.1f}% | Rise: {rise_pct:.1f}%\n"
-                        f"Fundamentals: {fund_score:.1f}/{max_score} (core {core_passed}/5)\n"
+                        f"Fundamentals: {fund_score:.1f}/{max_score}\n"
                         f"{fund_summary}\n"
                     )
                     results.append({"message": message, "category": category, "signal": signal, "ticker": ticker})

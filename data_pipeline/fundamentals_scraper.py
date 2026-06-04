@@ -16,15 +16,29 @@ def fetch_fundamentals(ticker):
         stock = yf.Ticker(ticker)
         info = stock.info
 
+        fcf = info.get('freeCashflow')
         return {
             'sector': info.get('sector'),
+            'industry': info.get('industry'),
             'pe': info.get('trailingPE'),
+            'forward_pe': info.get('forwardPE'),
+            'peg_ratio': info.get('pegRatio'),
             'op_margin': info.get('operatingMargins'),
+            'profit_margin': info.get('profitMargins'),
+            'gross_margin': info.get('grossMargins'),
             'roe': info.get('returnOnEquity'),
             'revenue_growth': info.get('revenueGrowth'),
             'earnings_growth': info.get('earningsGrowth'),
+            'quarterly_earnings_growth': info.get('earningsQuarterlyGrowth'),
             'debt_equity': info.get('debtToEquity'),
-            'free_cash_flow_positive': 1 if info.get('freeCashflow', 0) and info.get('freeCashflow', 0) > 0 else 0,
+            'free_cash_flow_positive': 1 if fcf and fcf > 0 else 0,
+            'free_cash_flow': fcf,
+            'total_revenue': info.get('totalRevenue'),
+            'book_value': info.get('bookValue'),
+            'price_to_book': info.get('priceToBook'),
+            'total_cash': info.get('totalCash'),
+            'total_debt': info.get('totalDebt'),
+            'current_ratio': info.get('currentRatio'),
             'institutional_ownership': info.get('heldPercentInstitutions'),
             'insider_ownership': info.get('heldPercentInsiders'),
         }
@@ -38,17 +52,28 @@ def save_fundamentals(ticker, data):
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
         INSERT OR REPLACE INTO fundamentals
-        (ticker, updated_at, sector, pe, op_margin, roe, revenue_growth, 
-         earnings_growth, debt_equity, free_cash_flow_positive,
-         institutional_ownership, insider_ownership, fund_score, max_score, core_passed)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (ticker, updated_at, sector, industry, pe, forward_pe, peg_ratio,
+         op_margin, profit_margin, gross_margin, roe,
+         revenue_growth, earnings_growth, quarterly_earnings_growth,
+         debt_equity, free_cash_flow_positive, free_cash_flow, total_revenue,
+         book_value, price_to_book, total_cash, total_debt, current_ratio,
+         institutional_ownership, insider_ownership,
+         business_model, fund_score, max_score, core_passed)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         ticker, datetime.now().isoformat(),
-        data.get('sector'), data.get('pe'), data.get('op_margin'), data.get('roe'),
-        data.get('revenue_growth'), data.get('earnings_growth'), data.get('debt_equity'),
-        data.get('free_cash_flow_positive'),
+        data.get('sector'), data.get('industry'), data.get('pe'),
+        data.get('forward_pe'), data.get('peg_ratio'),
+        data.get('op_margin'), data.get('profit_margin'), data.get('gross_margin'),
+        data.get('roe'),
+        data.get('revenue_growth'), data.get('earnings_growth'),
+        data.get('quarterly_earnings_growth'),
+        data.get('debt_equity'), data.get('free_cash_flow_positive'),
+        data.get('free_cash_flow'), data.get('total_revenue'),
+        data.get('book_value'), data.get('price_to_book'),
+        data.get('total_cash'), data.get('total_debt'), data.get('current_ratio'),
         data.get('institutional_ownership'), data.get('insider_ownership'),
-        None, None, None  # scores computed later
+        None, None, None, None  # business_model + scores filled in later
     ))
     conn.commit()
     conn.close()

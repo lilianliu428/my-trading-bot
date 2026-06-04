@@ -18,19 +18,10 @@ async def post_init(application):
         BotCommand("remove", "Remove ticker from watchlist"),
         BotCommand("list", "Show your watchlist"),
     ])
-    # initial cache build in background (don't block startup)
-#    from cache import refresh_cache
- #   import threading
-  #  threading.Thread(target=refresh_cache, daemon=True).start()
-
     scheduler = AsyncIOScheduler()
     scheduler.add_job(scan_watchlist_and_send, trigger="cron", hour=9, minute=0)
-
-    # refresh cache every hour
-#    scheduler.add_job(refresh_cache, trigger="cron", minute=0)
-
     scheduler.start()
-    print("Scheduler started — scan runs daily at 9:00 AM, cache refreshes hourly")
+    print("Scheduler started — daily watchlist scan at 9:00 AM")
 
 app = Application.builder().token(TOKEN).post_init(post_init).build()
 

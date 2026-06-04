@@ -19,3 +19,7 @@ watchlist.json
 .idea/
 .vscode/
 data.db
+
+# Local working backups
+*.bak
+data.db.before_*
