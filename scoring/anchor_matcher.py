@@ -61,7 +61,7 @@ def build_fingerprint(ticker: str) -> Optional[dict]:
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT ticker, total_revenue, quarterly_earnings_growth,
+        SELECT ticker, total_revenue, revenue_growth,
                gross_margin, op_margin, profit_margin,
                free_cash_flow, business_model
         FROM fundamentals
@@ -92,7 +92,6 @@ def build_fingerprint(ticker: str) -> Optional[dict]:
         "revenue_growth": float(growth) if growth is not None else None,
         "gross_margin": float(gross_margin) if gross_margin is not None else None,
         "op_margin": float(op_margin) if op_margin is not None else None,
-        "fcf_margin": float(fcf_margin) if fcf_margin is not None else None,
         "net_margin": float(net_margin) if net_margin is not None else None,
     }
 
@@ -106,7 +105,6 @@ COMPARE_FIELDS = [
     "revenue_growth",   # decimal
     "gross_margin",     # decimal
     "op_margin",        # decimal
-    "fcf_margin",       # decimal
     "net_margin",       # decimal
 ]
 
@@ -142,7 +140,6 @@ FIELD_SCALES = {
     "revenue_growth":  2.5,   # decimal, typical range -0.5 to +2.0
     "gross_margin":    1.0,   # decimal, typical range 0 to 0.95
     "op_margin":       1.15,  # decimal, typical range -0.5 to +0.65
-    "fcf_margin":      1.0,   # decimal, typical range -0.5 to +0.5
     "net_margin":      1.0,   # decimal, typical range -0.5 to +0.5
 }
 
