@@ -22,7 +22,6 @@ import sqlite3
 from typing import Optional
 
 from scoring.historical_anchors import ANCHORS, all_anchor_points
-from scoring.sectors.classifier import classify_business_model
 
 DB_PATH = "/home/ubuntu/my-trading-bot/data.db"
 
@@ -222,9 +221,6 @@ def match(
     fp = build_fingerprint(ticker)
     if fp is None:
         return []
-    if fp["bucket"] is None:
-        # Try to classify from ticker if business_model column is empty
-        fp["bucket"] = classify_business_model(ticker)
     if fp["bucket"] is None:
         return []
 
