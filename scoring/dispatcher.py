@@ -14,6 +14,9 @@ from scoring.sectors.technology.saas_growth import score as score_saas
 from scoring.sectors.technology.mature_tech import score as score_mature_tech
 from scoring.sectors.technology.semiconductors import score as score_semis
 from scoring.sectors.financials.banks import score as score_banks
+from scoring.sectors.real_estate.reits import score as score_reits
+from scoring.sectors.healthcare.biotech import score as score_biotech
+from scoring.sectors.healthcare.pharma import score as score_pharma
 from scoring.sectors.default import score as score_default
 
 
@@ -27,10 +30,10 @@ SCORERS = {
     # all fall through to default for now:
     "insurance":        score_default,
     "financial_other":  score_default,
-    "biotech":          score_default,
-    "pharma":           score_default,
+    "biotech":          score_biotech,
+    "pharma":           score_pharma,
     "healthcare_other": score_default,
-    "reit":             score_default,
+    "reit":             score_reits,
     "industrial":       score_default,
     "consumer_cyclical": score_default,
     "consumer_defensive": score_default,
