@@ -63,7 +63,7 @@ def build_fingerprint(ticker: str) -> Optional[dict]:
         """
         SELECT ticker, total_revenue, revenue_growth,
                gross_margin, op_margin, profit_margin,
-               free_cash_flow, business_model
+               business_model
         FROM fundamentals
         WHERE ticker = ?
         ORDER BY updated_at DESC
@@ -77,10 +77,10 @@ def build_fingerprint(ticker: str) -> Optional[dict]:
     if row is None:
         return None
 
-    _, revenue, growth, gross_margin, op_margin, profit_margin, fcf, bucket = row
+    _, revenue, growth, gross_margin, op_margin, profit_margin, bucket = row
 
     # Compute fcf_margin from raw FCF / revenue
-    fcf_margin = (fcf / revenue) if (fcf is not None and revenue) else None
+    #fcf_margin = (fcf / revenue) if (fcf is not None and revenue) else None
 
     # profit_margin from yfinance is net margin (decimal)
     net_margin = profit_margin
