@@ -22,7 +22,7 @@ import sqlite3
 from typing import Optional
 
 from scoring.historical_anchors import ANCHORS, all_anchor_points
-
+from scoring.sectors.classifier import classify_business_model
 
 DB_PATH = "/home/ubuntu/my-trading-bot/data.db"
 
@@ -63,11 +63,11 @@ def build_fingerprint(ticker: str) -> Optional[dict]:
     cur.execute(
         """
         SELECT ticker, total_revenue, quarterly_earnings_growth,
-               gross_margin, profit_margin, free_cash_flow,
-               business_model
+               gross_margin, op_margin, profit_margin,
+               free_cash_flow, business_model
         FROM fundamentals
         WHERE ticker = ?
-        ORDER BY snapshot_date DESC
+        ORDER BY updated_at DESC
         LIMIT 1
         """,
         (ticker.upper(),),
@@ -78,16 +78,13 @@ def build_fingerprint(ticker: str) -> Optional[dict]:
     if row is None:
         return None
 
-    _, revenue, growth, gross_margin, profit_margin, fcf, bucket = row
+    _, revenue, growth, gross_margin, op_margin, profit_margin, fcf, bucket = row
 
-    # Compute fcf_margin and net_margin if we have revenue
+    # Compute fcf_margin from raw FCF / revenue
     fcf_margin = (fcf / revenue) if (fcf is not None and revenue) else None
-    net_margin = profit_margin  # already a decimal in our DB
 
-    # Operating margin isn't directly stored — we approximate from profit margin
-    # In future stages we can compute true op_margin from income statement.
-    # For now we use profit_margin as a proxy. This is a known limitation.
-    op_margin = profit_margin
+    # profit_margin from yfinance is net margin (decimal)
+    net_margin = profit_margin
 
     return {
         "ticker": ticker.upper(),
@@ -131,36 +128,72 @@ def _normalize_field(field: str, value: float) -> float:
     return value
 
 
+# ---------------------------------------------------------------
+# Similarity: scaled euclidean distance with exponential decay
+# ---------------------------------------------------------------
+# We use scaled euclidean rather than cosine because cosine only captures
+# the "angle" of the fingerprint vector — direction, not magnitude. Two
+# companies with similar margin ratios but very different absolute margins
+# would score 0.99 in pure cosine. Euclidean captures the actual differences.
+#
+# Per-field scale factors normalize each field's contribution. Without these,
+# log-revenue (range ~9-12) would dominate margin differences (range ~0-1).
+FIELD_SCALES = {
+    "revenue":         3.0,   # log10, typical range 9-12 (1B to 1T)
+    "revenue_growth":  2.5,   # decimal, typical range -0.5 to +2.0
+    "gross_margin":    1.0,   # decimal, typical range 0 to 0.95
+    "op_margin":       1.15,  # decimal, typical range -0.5 to +0.65
+    "fcf_margin":      1.0,   # decimal, typical range -0.5 to +0.5
+    "net_margin":      1.0,   # decimal, typical range -0.5 to +0.5
+}
+
+# Decay rate for distance → similarity mapping. exp(-3d) gives:
+#   d=0    → sim=1.00 (identical)
+#   d=0.15 → sim=0.64 (close match — same bucket, similar phase)
+#   d=0.25 → sim=0.47 (moderate — same industry, different phase)
+#   d=0.50 → sim=0.22 (weak — different shape)
+#   d=0.75 → sim=0.11 (essentially unrelated)
+DECAY_RATE = 3.0
+
+
 def cosine_similarity(fp_a: dict, fp_b: dict) -> float:
     """
-    Compute cosine similarity between two fingerprints over COMPARE_FIELDS.
-    Skips fields that are None in either fingerprint.
+    Compute similarity between two fingerprints using scaled euclidean
+    distance with exponential decay.
 
-    Returns a float in [-1, 1] where 1 = identical shape.
-    Returns 0 if no overlapping non-null fields exist.
+    Returns float in [0, 1] where:
+        1.0 = identical fingerprints
+        ~0.6 = strong match (similar phase, similar magnitude)
+        ~0.4 = moderate match (same bucket, somewhat different)
+        <0.3 = weak/no meaningful match
+
+    Skips fields that are None in either fingerprint. Needs at least 2
+    overlapping non-null fields to return a meaningful score.
+
+    Note: kept name `cosine_similarity` for API stability — the algorithm
+    is actually scaled euclidean. Future cleanup could rename.
     """
-    vec_a = []
-    vec_b = []
+    sum_sq = 0.0
+    n = 0
     for field in COMPARE_FIELDS:
         val_a = _normalize_field(field, fp_a.get(field))
         val_b = _normalize_field(field, fp_b.get(field))
         if val_a is None or val_b is None:
             continue
-        vec_a.append(val_a)
-        vec_b.append(val_b)
+        scale = FIELD_SCALES.get(field, 1.0)
+        diff = (val_a - val_b) / scale
+        sum_sq += diff * diff
+        n += 1
 
-    if len(vec_a) < 2:
+    if n < 2:
         # Need at least 2 dimensions for meaningful similarity
         return 0.0
 
-    dot = sum(a * b for a, b in zip(vec_a, vec_b))
-    mag_a = math.sqrt(sum(a * a for a in vec_a))
-    mag_b = math.sqrt(sum(b * b for b in vec_b))
+    # Average distance per dimension — keeps scale stable as field count varies
+    distance = math.sqrt(sum_sq / n)
 
-    if mag_a == 0 or mag_b == 0:
-        return 0.0
-
-    return dot / (mag_a * mag_b)
+    # Exponential decay: distance → similarity
+    return math.exp(-DECAY_RATE * distance)
 
 
 # ---------------------------------------------------------------
@@ -190,7 +223,9 @@ def match(
     if fp is None:
         return []
     if fp["bucket"] is None:
-        # No bucket = can't match. Run fundamentals scraper to populate business_model.
+        # Try to classify from ticker if business_model column is empty
+        fp["bucket"] = classify_business_model(ticker)
+    if fp["bucket"] is None:
         return []
 
     candidate_industry = _bucket_to_industry(fp["bucket"])
@@ -227,9 +262,9 @@ def match(
 # ---------------------------------------------------------------
 # Interpretation — apply cautious-on-losses logic
 # ---------------------------------------------------------------
-LOSER_WARNING_THRESHOLD = 0.75   # if top match is loser >= this sim, strong warning
-SECONDARY_LOSER_THRESHOLD = 0.70  # if 2nd/3rd match is loser >= this sim, caution
-STRONG_MATCH_THRESHOLD = 0.80    # similarity above which we consider a match strong
+LOSER_WARNING_THRESHOLD = 0.50   # if top match is loser >= this sim, strong warning
+SECONDARY_LOSER_THRESHOLD = 0.45  # if 2nd/3rd match is loser >= this sim, caution
+STRONG_MATCH_THRESHOLD = 0.55    # similarity above which we consider a match strong
 
 
 def interpret_matches(matches: list) -> dict:
