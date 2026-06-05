@@ -54,7 +54,7 @@ INDUSTRY_GROUPS = {
     "tech": ["saas_growth", "mature_tech", "semiconductors"],
     "financial": ["bank", "reit"],
     "healthcare": ["biotech", "pharma"],
-    "consumer": ["consumer_cyclical"],
+    "consumer": ["consumer_cyclical", "consumer_defensive"],
     "industrial": ["industrial"],
 }
 
