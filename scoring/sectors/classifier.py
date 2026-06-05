@@ -190,7 +190,7 @@ def classify_all_in_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute("""
-        SELECT ticker, sector, industry, revenue_growth, profit_margin
+        SELECT ticker, sector, industry, revenue_growth, profit_margin, total_revenue
         FROM fundamentals
     """).fetchall()
     
