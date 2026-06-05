@@ -294,15 +294,31 @@ def interpret_matches(matches: list) -> dict:
 
     # Recovery phase match — incumbent comeback signal
     if top_outcome == "winner" and "recovery" in top_phase.lower() and top_sim >= STRONG_MATCH_THRESHOLD:
+        # Check for runner-up loser anchor (e.g. INTC-2025-recovery + INTC-2022-collapse)
+        loser_caution = None
+        for m in matches[1:]:
+            _, m_phase, m_sim, m_outcome, m_year, _ = m
+            if m_outcome == "loser" and m_sim >= SECONDARY_LOSER_THRESHOLD:
+                loser_caution = (m[0], m_year, m_sim)
+                break
+
+        msg = (
+            f"🔄 Recovery pattern: resembles {top_ticker} {top_year} "
+            f"({top_phase}) at {top_sim:.0%} similarity. "
+            f"Incumbent-transformation winner pattern."
+        )
+        if loser_caution:
+            msg += (
+                f" ⚠️ Note: also resembles {loser_caution[0]} {loser_caution[1]} "
+                f"({loser_caution[2]:.0%}, loser) — recovery not yet confirmed."
+            )
         return {
             "verdict": "recovery_signal",
-            "message": (
-                f"🔄 Recovery pattern: resembles {top_ticker} {top_year} "
-                f"({top_phase}) at {top_sim:.0%} similarity. "
-                f"Incumbent-transformation winner pattern."
-            ),
+            "message": msg,
             "top_match": top,
         }
+
+
 
     # Strong winner — but check for loser in 2nd/3rd
     if top_outcome == "winner" and top_sim >= STRONG_MATCH_THRESHOLD:
