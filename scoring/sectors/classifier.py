@@ -154,14 +154,14 @@ def classify(row):
         # Refinement: "Software - Infrastructure/Application" is sometimes mature, not saas_growth.
         # Use revenue + growth + profitability to disambiguate.
         if bucket == "saas_growth":
-            # Mega-cap profitable software growing modestly = mature tech (MSFT, ORCL)
-            if (revenue is not None and revenue > 50e9
-                and profit_margin is not None and profit_margin > 0.15
-                and rev_growth is not None and rev_growth < 0.20):
+            # Mega-cap profitable software = mature regardless of growth pace (MSFT)
+            if (revenue is not None and revenue > 100e9
+                    and profit_margin is not None and profit_margin > 0.20):
                 return "mature_tech"
-            # Smaller but solidly mature, slowing growth = mature tech (ADSK, CDNS)
-            if (profit_margin is not None and profit_margin > 0.20
-                and rev_growth is not None and rev_growth < 0.15):
+            # Solidly profitable software not growing explosively = mature
+            # Captures ORCL, ADSK, CDNS, PAYX, PTC, FTNT — but NOT PLTR (high growth)
+            if (profit_margin is not None and profit_margin > 0.18
+                    and rev_growth is not None and rev_growth < 0.25):
                 return "mature_tech"
         return bucket
 
