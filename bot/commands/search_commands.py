@@ -133,10 +133,30 @@ async def search_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         signal = "NO SIGNAL"; emoji = "📊"
 
+    pattern_line = ""
+    try:
+        from scoring.anchor_matcher import match, interpret_matches
+        matches = match(ticker, top_k=3)
+        if matches and matches[0][2] >= 0.60:  # only show if top match >= 60%
+            interp = interpret_matches(matches)
+            verdict = interp.get("verdict")
+            # Smart level: full detail for warnings/recovery, minimal for normal winners
+            if verdict in ("loser_warning", "recovery_signal"):
+                pattern_line = f"\n{interp['message']}\n"
+            elif verdict == "winner_pattern":
+                top = matches[0]
+                pattern_line = f"Pattern: 🟢 Looks like {top[0]}-{top[4]} ({top[2]:.0%}, winner)\n"
+            elif verdict == "mixed":
+                top = matches[0]
+                pattern_line = f"Pattern: 🟡 Looks like {top[0]}-{top[4]} ({top[2]:.0%}, mixed)\n"
+    except Exception as e:
+        print(f"Pattern matching failed for {ticker}: {e}")
+
     fund_summary = "\n".join(fund_reasons)
     msg = (
         f"{emoji} {signal}: {ticker} (LIVE)\n"
         f"Bucket: {bucket}\n"
+        f"{pattern_line}"
         f"Price: ${current_price:.2f}\n"
         f"RSI: {latest_rsi:.1f}\n"
         f"Drop: {drop_pct:.1f}% | Rise: {rise_pct:.1f}%\n"

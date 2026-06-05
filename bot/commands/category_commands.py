@@ -1,7 +1,53 @@
+import re
 from telegram import Update
 from telegram.ext import ContextTypes
 from data_pipeline.database import get_all_latest_snapshots
 from data_pipeline.ticker_universe import analyze_stock_from_db, get_all_tickers
+
+
+def _extract_ticker_from_message(msg: str) -> str | None:
+    """Pull the ticker symbol out of a result message header like '🔍 BUY CANDIDATE: NVDA'."""
+    match = re.search(r":\s*([A-Z]{1,5})\b", msg)
+    return match.group(1) if match else None
+
+
+def _inject_pattern_line(msg: str) -> str:
+    """Insert a pattern-match line right after the 'Bucket:' line in a result message."""
+    ticker = _extract_ticker_from_message(msg)
+    if not ticker:
+        return msg
+
+    try:
+        from scoring.anchor_matcher import match, interpret_matches
+        matches = match(ticker, top_k=3)
+        if not matches or matches[0][2] < 0.60:
+            return msg  # weak match, omit entirely
+
+        interp = interpret_matches(matches)
+        verdict = interp.get("verdict")
+        top = matches[0]
+
+        if verdict in ("loser_warning", "recovery_signal"):
+            pattern_line = interp["message"]
+        elif verdict == "winner_pattern":
+            pattern_line = f"Pattern: 🟢 Looks like {top[0]}-{top[4]} ({top[2]:.0%}, winner)"
+        elif verdict == "mixed":
+            pattern_line = f"Pattern: 🟡 Looks like {top[0]}-{top[4]} ({top[2]:.0%}, mixed)"
+        else:
+            return msg  # weak verdict, omit entirely
+    except Exception as e:
+        print(f"Pattern matching failed for {ticker}: {e}")
+        return msg
+
+    # Insert after the 'Bucket:' line if present, otherwise after the header line
+    lines = msg.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith("Bucket:"):
+            lines.insert(i + 1, pattern_line)
+            return "\n".join(lines)
+    # No Bucket: line found, insert after first line
+    lines.insert(1, pattern_line)
+    return "\n".join(lines)
 
 
 async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -46,7 +92,8 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"No stocks in {cat_arg} right now.")
         return
 
-    messages = [r['message'] for r in results]
+    # Inject pattern-match lines into each result message
+    messages = [_inject_pattern_line(r['message']) for r in results]
     chunks = [messages[i:i+5] for i in range(0, len(messages), 5)]
     for i, chunk in enumerate(chunks):
         header = f"📋 {cat_arg.upper()} ({len(messages)} found):\n\n" if i == 0 else ""
