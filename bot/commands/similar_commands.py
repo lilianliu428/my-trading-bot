@@ -31,7 +31,10 @@ async def similar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     ticker = context.args[0].upper()
-    cross_industry = "--cross" in context.args
+    cross_industry = any(
+        flag in context.args
+        for flag in ["--cross", "—cross", "–cross"]
+    )
 
     await update.message.reply_text(f"🔎 Analyzing {ticker}...")
 
