@@ -1257,6 +1257,236 @@ ANCHORS = {
             "notes": "MAX still grounded + COVID destroyed air travel. Massive losses. Took on $44B debt. Stock $89 low. Never sustained recovery to 2018 levels.",
         },
     },
+# =========================================================
+    # KO — Coca-Cola
+    # Arc: sugar-tax fears stagnation → bottling refranchise margin lift → pricing power
+    # =========================================================
+    "KO": {
+        "2015-sugar-tax-fears-stagnation": {
+            "year": 2015,
+            "bucket": "consumer_defensive",
+            "revenue": 44.29e9,
+            "revenue_growth": -0.037,
+            "gross_margin": 0.605,
+            "op_margin": 0.197,
+            "fcf_margin": 0.18,
+            "net_margin": 0.166,
+            "macro_context": "low-rates-sugar-tax-era",
+            "outcome": "winner",
+            "notes": "Revenue declining 4-5% per year. Sugar tax narrative scared investors. Stock $40s, low-volume era. Pre-bottling-refranchise.",
+        },
+        "2018-bottling-refranchise-margin-lift": {
+            "year": 2018,
+            "bucket": "consumer_defensive",
+            "revenue": 31.86e9,
+            "revenue_growth": -0.099,  # divested bottling
+            "gross_margin": 0.633,
+            "op_margin": 0.269,
+            "fcf_margin": 0.20,
+            "net_margin": 0.20,
+            "macro_context": "peak-zirp",
+            "outcome": "winner",
+            "notes": "Sold low-margin bottling operations. Revenue dropped but margins jumped. Higher-quality earnings.",
+        },
+        "2024-pricing-power-mature": {
+            "year": 2024,
+            "bucket": "consumer_defensive",
+            "revenue": 47.06e9,
+            "revenue_growth": 0.029,
+            "gross_margin": 0.617,
+            "op_margin": 0.318,
+            "fcf_margin": 0.26,
+            "net_margin": 0.226,
+            "macro_context": "rate-hikes-inflation",
+            "outcome": "winner",
+            "notes": "Pricing power passed through inflation. Margins at decade-high. Slow steady compounder.",
+        },
+    },
+
+    # =========================================================
+    # WMT — Walmart
+    # Arc: Amazon-fear era → ecommerce investments → omnichannel breakout
+    # =========================================================
+    "WMT": {
+        "2016-amazon-fear-era": {
+            "year": 2016,
+            "bucket": "consumer_defensive",
+            "revenue": 482.1e9,
+            "revenue_growth": -0.007,
+            "gross_margin": 0.252,
+            "op_margin": 0.050,
+            "fcf_margin": 0.03,
+            "net_margin": 0.031,
+            "macro_context": "low-rates-amazon-disruption-fear",
+            "outcome": "winner",
+            "notes": "Fiscal year ended Jan 2016. Revenue declining (FX + Amazon fear). Stock $60s. Lowest valuation in decade. Pre-Jet.com pivot.",
+        },
+        "2021-omnichannel-breakout": {
+            "year": 2021,
+            "bucket": "consumer_defensive",
+            "revenue": 559.2e9,
+            "revenue_growth": 0.067,
+            "gross_margin": 0.243,
+            "op_margin": 0.040,
+            "fcf_margin": 0.05,
+            "net_margin": 0.024,
+            "macro_context": "pandemic-zirp",
+            "outcome": "winner",
+            "notes": "Fiscal year ended Jan 2021. eCommerce +79% in pandemic. Pickup/delivery infrastructure proven. Stock ATH.",
+        },
+        "2025-online-grocery-leader": {
+            "year": 2025,
+            "bucket": "consumer_defensive",
+            "revenue": 680.99e9,
+            "revenue_growth": 0.052,
+            "gross_margin": 0.247,
+            "op_margin": 0.042,
+            "fcf_margin": 0.02,
+            "net_margin": 0.030,
+            "macro_context": "rate-hikes",
+            "outcome": "winner",
+            "notes": "Now #1 online grocery in US. Advertising business growing rapidly. Closed revenue gap to AMZN. Stock 3x'd from 2016 lows.",
+        },
+    },
+
+    # =========================================================
+    # COST — Costco
+    # Arc: steady compounder phases — peak ZIRP, post-pandemic, pricing power
+    # =========================================================
+    "COST": {
+        "2018-mature-compounder": {
+            "year": 2018,
+            "bucket": "consumer_defensive",
+            "revenue": 138.43e9,
+            "revenue_growth": 0.097,
+            "gross_margin": 0.134,
+            "op_margin": 0.032,
+            "fcf_margin": 0.02,
+            "net_margin": 0.023,
+            "macro_context": "peak-zirp",
+            "outcome": "winner",
+            "notes": "Fiscal year ended Sep 2018. Membership fee growth steady. Stock $220. Best-in-class warehouse retailer.",
+        },
+        "2022-pandemic-pricing-resilience": {
+            "year": 2022,
+            "bucket": "consumer_defensive",
+            "revenue": 226.95e9,
+            "revenue_growth": 0.158,
+            "gross_margin": 0.110,
+            "op_margin": 0.034,
+            "fcf_margin": 0.02,
+            "net_margin": 0.026,
+            "macro_context": "rate-hikes-inflation",
+            "outcome": "winner",
+            "notes": "Fiscal year ended Aug 2022. Pricing power + member loyalty intact during inflation. Stock $560.",
+        },
+        "2025-record-high": {
+            "year": 2025,
+            "bucket": "consumer_defensive",
+            "revenue": 280.39e9,
+            "revenue_growth": 0.082,
+            "gross_margin": 0.111,
+            "op_margin": 0.037,
+            "fcf_margin": 0.04,
+            "net_margin": 0.030,
+            "macro_context": "rate-hikes",
+            "outcome": "winner",
+            "notes": "Membership fee at $5.3B. Stock ATH $1000+. Premium consumer staples valuation.",
+        },
+    },
+
+    # =========================================================
+    # PG — Procter & Gamble
+    # Arc: stagnation/restructuring → pricing power compounder
+    # =========================================================
+    "PG": {
+        "2015-stagnation-restructuring": {
+            "year": 2015,
+            "bucket": "consumer_defensive",
+            "revenue": 76.28e9,
+            "revenue_growth": -0.054,
+            "gross_margin": 0.49,
+            "op_margin": 0.181,
+            "fcf_margin": 0.13,
+            "net_margin": 0.10,
+            "macro_context": "low-rates-strong-dollar",
+            "outcome": "winner",
+            "notes": "Currency headwinds. Divesting 100+ brands. Stock $80 sideways for years. Pre-Activist David Taylor era.",
+        },
+        "2020-pandemic-consumer-staples-bid": {
+            "year": 2020,
+            "bucket": "consumer_defensive",
+            "revenue": 70.95e9,
+            "revenue_growth": 0.049,
+            "gross_margin": 0.499,
+            "op_margin": 0.226,
+            "fcf_margin": 0.20,
+            "net_margin": 0.181,
+            "macro_context": "pandemic-zirp",
+            "outcome": "winner",
+            "notes": "Bath/laundry brands ripped during pandemic. Margin expansion + organic growth returning.",
+        },
+        "2024-pricing-power-compounder": {
+            "year": 2024,
+            "bucket": "consumer_defensive",
+            "revenue": 84.34e9,
+            "revenue_growth": 0.024,
+            "gross_margin": 0.510,
+            "op_margin": 0.215,
+            "fcf_margin": 0.18,
+            "net_margin": 0.181,
+            "macro_context": "rate-hikes",
+            "outcome": "winner",
+            "notes": "Passed through inflation cleanly. Margins recovering toward peak. Stock ATH ~$170.",
+        },
+    },
+
+    # =========================================================
+    # KHC — Kraft Heinz
+    # Arc: post-merger margin peak → 3G playbook collapse → permanent re-rating
+    # CAUTION: classic mistaken-margin-expansion story — 3G cost cuts looked great until brands eroded
+    # =========================================================
+    "KHC": {
+        "2017-3g-playbook-peak": {
+            "year": 2017,
+            "bucket": "consumer_defensive",
+            "revenue": 26.23e9,
+            "revenue_growth": -0.003,
+            "gross_margin": 0.378,
+            "op_margin": 0.265,
+            "fcf_margin": 0.20,
+            "net_margin": 0.41,  # one-time tax reform benefit boosted net
+            "macro_context": "peak-zirp",
+            "outcome": "loser",
+            "notes": "Margins looked stunning post-merger 3G cost cuts. Stock $90. Buffett/3G icons. WARNING: under-investment in brands becoming visible.",
+        },
+        "2019-3g-collapse": {
+            "year": 2019,
+            "bucket": "consumer_defensive",
+            "revenue": 24.98e9,
+            "revenue_growth": -0.048,
+            "gross_margin": 0.336,
+            "op_margin": -0.46,  # massive impairments
+            "fcf_margin": 0.10,
+            "net_margin": -0.20,
+            "macro_context": "late-cycle",
+            "outcome": "loser",
+            "notes": "$15.4B writedown. Dividend cut 36%. SEC probe. Stock -50% to $25. Buffett admitted 'overpaid'. 3G playbook discredited.",
+        },
+        "2024-stagnation-stabilization": {
+            "year": 2024,
+            "bucket": "consumer_defensive",
+            "revenue": 25.85e9,
+            "revenue_growth": -0.024,
+            "gross_margin": 0.347,
+            "op_margin": 0.065,
+            "fcf_margin": 0.14,
+            "net_margin": 0.106,
+            "macro_context": "rate-hikes",
+            "outcome": "loser",
+            "notes": "Revenue flat $25B for 8+ years. Stock $30 — half of 2017 peak. Demerger announced. Never recovered.",
+        },
+    },
 
 }
 
