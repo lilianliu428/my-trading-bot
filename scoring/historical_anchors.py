@@ -1487,6 +1487,144 @@ ANCHORS = {
             "notes": "Revenue flat $25B for 8+ years. Stock $30 — half of 2017 peak. Demerger announced. Never recovered.",
         },
     },
+# =========================================================
+    # MDLZ — Mondelez International
+    # Arc: Kraft spinoff growth → margin discipline → snacking compounder
+    # =========================================================
+    "MDLZ": {
+        "2017-margin-cost-cutting": {
+            "year": 2017,
+            "bucket": "consumer_defensive",
+            "revenue": 25.90e9,
+            "revenue_growth": 0.014,
+            "gross_margin": 0.394,
+            "op_margin": 0.163,
+            "fcf_margin": 0.10,
+            "net_margin": 0.111,
+            "macro_context": "peak-zirp",
+            "outcome": "winner",
+            "notes": "Slow revenue growth, margin focus. Power Brands (Oreo, Cadbury) leading. Stock $43.",
+        },
+        "2020-pandemic-snacks-surge": {
+            "year": 2020,
+            "bucket": "consumer_defensive",
+            "revenue": 26.58e9,
+            "revenue_growth": 0.027,
+            "gross_margin": 0.397,
+            "op_margin": 0.146,
+            "fcf_margin": 0.13,
+            "net_margin": 0.139,
+            "macro_context": "pandemic-zirp",
+            "outcome": "winner",
+            "notes": "Pandemic at-home snacking. Power Brands held share gains. Stock breakout to $60.",
+        },
+        "2023-pricing-power-peak": {
+            "year": 2023,
+            "bucket": "consumer_defensive",
+            "revenue": 36.02e9,
+            "revenue_growth": 0.144,
+            "gross_margin": 0.385,
+            "op_margin": 0.184,
+            "fcf_margin": 0.10,
+            "net_margin": 0.130,
+            "macro_context": "rate-hikes-inflation",
+            "outcome": "winner",
+            "notes": "Strong pricing power pass-through. Stock $75 ATH. Cocoa cost concerns emerging but margins resilient.",
+        },
+    },
+
+    # =========================================================
+    # CL — Colgate-Palmolive
+    # Arc: PG-like compounder — toothpaste duopoly, steady margins
+    # =========================================================
+    "CL": {
+        "2018-fx-headwind-stagnation": {
+            "year": 2018,
+            "bucket": "consumer_defensive",
+            "revenue": 15.54e9,
+            "revenue_growth": 0.001,
+            "gross_margin": 0.594,
+            "op_margin": 0.245,
+            "fcf_margin": 0.18,
+            "net_margin": 0.16,
+            "macro_context": "peak-zirp-strong-dollar",
+            "outcome": "winner",
+            "notes": "Emerging market FX hit. Flat revenue. Global Growth and Efficiency Program ongoing. Stock $60s.",
+        },
+        "2021-pandemic-pricing": {
+            "year": 2021,
+            "bucket": "consumer_defensive",
+            "revenue": 17.42e9,
+            "revenue_growth": 0.061,
+            "gross_margin": 0.583,
+            "op_margin": 0.211,
+            "fcf_margin": 0.16,
+            "net_margin": 0.121,
+            "macro_context": "pandemic-zirp",
+            "outcome": "winner",
+            "notes": "Toothpaste/personal care demand stable. Hill's Pet Nutrition growing. Stock $80s.",
+        },
+        "2024-margin-recovery": {
+            "year": 2024,
+            "bucket": "consumer_defensive",
+            "revenue": 20.10e9,
+            "revenue_growth": 0.033,
+            "gross_margin": 0.603,
+            "op_margin": 0.212,
+            "fcf_margin": 0.18,
+            "net_margin": 0.144,
+            "macro_context": "rate-hikes",
+            "outcome": "winner",
+            "notes": "Gross margin recovery +70 bps. 41.4% global toothpaste market share. Stock $95.",
+        },
+    },
+
+    # =========================================================
+    # GIS — General Mills
+    # Arc: cereal stagnation → pandemic surge → declining categories
+    # CAUTION: long-term mixed outcome — staples company in declining categories
+    # =========================================================
+    "GIS": {
+        "2018-cereal-stagnation": {
+            "year": 2018,
+            "bucket": "consumer_defensive",
+            "revenue": 15.74e9,
+            "revenue_growth": 0.014,
+            "gross_margin": 0.349,
+            "op_margin": 0.165,
+            "fcf_margin": 0.14,
+            "net_margin": 0.124,
+            "macro_context": "peak-zirp",
+            "outcome": "mixed",
+            "notes": "Fiscal year ended May 2018. Acquired Blue Buffalo for $8B. Yogurt declining, cereal flat. Stock $45.",
+        },
+        "2021-pandemic-snacks-boost": {
+            "year": 2021,
+            "bucket": "consumer_defensive",
+            "revenue": 18.13e9,
+            "revenue_growth": 0.034,
+            "gross_margin": 0.343,
+            "op_margin": 0.166,
+            "fcf_margin": 0.13,
+            "net_margin": 0.13,
+            "macro_context": "pandemic-zirp",
+            "outcome": "mixed",
+            "notes": "Fiscal year ended May 2021. At-home eating boosted revenue. Pet (Blue Buffalo) growing strong. Stock $60.",
+        },
+        "2024-category-decline": {
+            "year": 2024,
+            "bucket": "consumer_defensive",
+            "revenue": 19.86e9,
+            "revenue_growth": -0.001,
+            "gross_margin": 0.358,
+            "op_margin": 0.172,
+            "fcf_margin": 0.13,
+            "net_margin": 0.118,
+            "macro_context": "rate-hikes",
+            "outcome": "mixed",
+            "notes": "Fiscal year ended May 2024. Pivot to operational efficiency. Cereal declining, GLP-1 fears. Stock $60.",
+        },
+    },
 
 }
 
