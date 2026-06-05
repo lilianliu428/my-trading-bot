@@ -21,6 +21,27 @@ import math
 import sqlite3
 from typing import Optional
 
+# ---------------------------------------------------------------
+# FUTURE WORK — REIT bucket support
+# ---------------------------------------------------------------
+# REITs (O, SPG, AMT, VICI, etc.) don't fit our current 5-field fingerprint
+# (revenue, revenue_growth, gross_margin, op_margin, net_margin). REIT investors
+# care about FFO/AFFO margins, debt/EBITDA, occupancy, payout ratios — not the
+# standard P&L margins. Encoding REITs with current fields produces undifferen-
+# tiated matches (every REIT looks similar).
+#
+# To add REIT support properly:
+#   1. Add `operating_cash_flow` column to fundamentals DB table
+#      (ALTER TABLE + add to fundamentals_scraper.py via info.get('operatingCashflow'))
+#   2. Re-run scraper to populate ocf for all 555 tickers
+#   3. Add `ocf_margin` (ocf / revenue) to COMPARE_FIELDS + FIELD_SCALES
+#      — this helps ALL buckets, not just REITs
+#   4. Test on existing buckets to confirm matches stay stable
+#   5. Research REIT anchors: O, AMT, SPG, VICI (~12-15 phase points)
+#   6. Encode with gross_margin=None, op_margin=None (matcher skips None fields)
+#   7. Test `/similar O`, `/similar SPG` for phase-discriminating matches
+# ---------------------------------------------------------------
+
 from scoring.historical_anchors import ANCHORS, all_anchor_points
 
 DB_PATH = "/home/ubuntu/my-trading-bot/data.db"
