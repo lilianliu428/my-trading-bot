@@ -135,13 +135,14 @@ INDUSTRY_RULES = {
 def classify(row):
     """
     Given a fundamentals row dict with 'ticker', 'sector', 'industry',
-    'revenue_growth', 'profit_margin', etc, return a bucket name.
+    'revenue_growth', 'profit_margin', 'total_revenue' etc, return a bucket name.
     """
     ticker = row.get("ticker")
     sector = row.get("sector")
     industry = row.get("industry")
     rev_growth = row.get("revenue_growth")
     profit_margin = row.get("profit_margin")
+    revenue = row.get("total_revenue")
 
     # 1. Hardcoded overrides win
     if ticker in OVERRIDES:
@@ -151,10 +152,15 @@ def classify(row):
     bucket = INDUSTRY_RULES.get(industry)
     if bucket:
         # Refinement: "Software - Infrastructure/Application" is sometimes mature, not saas_growth.
-        # Use revenue_growth + profitability to disambiguate.
+        # Use revenue + growth + profitability to disambiguate.
         if bucket == "saas_growth":
-            # If profitable AND growth < 15%, it's actually mature tech
-            if (profit_margin is not None and profit_margin > 0.15
+            # Mega-cap profitable software growing modestly = mature tech (MSFT, ORCL)
+            if (revenue is not None and revenue > 50e9
+                and profit_margin is not None and profit_margin > 0.15
+                and rev_growth is not None and rev_growth < 0.20):
+                return "mature_tech"
+            # Smaller but solidly mature, slowing growth = mature tech (ADSK, CDNS)
+            if (profit_margin is not None and profit_margin > 0.20
                 and rev_growth is not None and rev_growth < 0.15):
                 return "mature_tech"
         return bucket
