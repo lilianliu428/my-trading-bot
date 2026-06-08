@@ -11,6 +11,7 @@ This module is the conceptual heart of Pillar 1.3.
 """
 
 import yfinance as yf
+import math
 
 
 # Terminal growth cap — no company can grow faster than the economy forever
@@ -233,6 +234,7 @@ def compute_historical_growth(ticker, years=5):
 
     # yfinance returns most recent year as first column. Iterate columns
     # left-to-right to get most recent first; reverse to get oldest first.
+
     fcf_values = []
     for col in cash_flow.columns:
         col_data = cash_flow[col]
@@ -246,10 +248,12 @@ def compute_historical_growth(ticker, years=5):
             ocf = col_data.get("Operating Cash Flow") or col_data.get("Cash Flow From Continuing Operating Activities")
             capex_val = col_data.get("Capital Expenditure")
             if ocf is not None and capex_val is not None:
-                # capex is usually negative in yfinance; FCF = OCF + capex (with sign)
                 fcf = float(ocf) + float(capex_val)
-        if fcf is not None:
-            fcf_values.append(fcf)
+
+        # Filter out NaN and None
+        if fcf is None or math.isnan(fcf):
+            continue
+        fcf_values.append(fcf)
 
     # Reverse so oldest is first, newest is last
     fcf_values = fcf_values[::-1]
