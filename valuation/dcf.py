@@ -160,25 +160,80 @@ def compute_intrinsic_value(inputs: DCFInputs) -> DCFResult:
         pv_terminal=pv_terminal,
     )
 
-if __name__ == "__main__":
-    # Test with MSFT using our hard-coded assumptions
-    msft_inputs = DCFInputs(
-        current_fcf=37.01e9,  # $37.01B from your DB
-        total_debt=125.43e9,  # $125.43B
-        total_cash=78.23e9,  # $78.23B
-        shares_outstanding=7.43e9,  # ~7.43B shares (placeholder, we'll verify)
+def compute_intrinsic_value_for_ticker(
+    ticker,
+    current_fcf,
+    high_growth_rate=0.15,
+    high_growth_years=10,
+    terminal_growth_rate=0.04,
+):
+    """
+    End-to-end DCF for a ticker using real WACC, real shares, real price.
 
+    Pulls all market-derived inputs automatically. Only the growth
+    assumptions are passed in — those still require judgment.
+
+    Args:
+        ticker: e.g. "MSFT"
+        current_fcf: latest annual FCF in dollars (from our fundamentals DB)
+        high_growth_rate, high_growth_years, terminal_growth_rate: growth assumptions
+
+    Returns:
+        dict with the DCFResult fields plus wacc_info for transparency
+    """
+    from valuation.inputs.wacc import compute_wacc
+
+    # Pull WACC and capital-structure inputs
+    wacc_info = compute_wacc(ticker)
+
+    # Build DCF inputs from real data
+    inputs = DCFInputs(
+        current_fcf=current_fcf,
+        total_debt=wacc_info["total_debt"],
+        total_cash=0,  # TODO: pull total_cash separately for cleaner net debt
+        shares_outstanding=wacc_info["shares_outstanding"],
+        high_growth_rate=high_growth_rate,
+        high_growth_years=high_growth_years,
+        terminal_growth_rate=terminal_growth_rate,
+        discount_rate=wacc_info["wacc"],
+    )
+
+    # Run the DCF
+    result = compute_intrinsic_value(inputs)
+
+    return {
+        "result": result,
+        "wacc_info": wacc_info,
+        "current_price": wacc_info["current_price"],
+        "upside_downside": (result.per_share_value - wacc_info["current_price"])
+                          / wacc_info["current_price"],
+    }
+
+if __name__ == "__main__":
+    # Phase 1.2: real WACC, real shares, real price
+    bundle = compute_intrinsic_value_for_ticker(
+        ticker="MSFT",
+        current_fcf=37.01e9,
         high_growth_rate=0.15,
         high_growth_years=10,
         terminal_growth_rate=0.04,
-        discount_rate=0.091,  # 9.1% cost of equity from our earlier calc
     )
 
-    result = compute_intrinsic_value(msft_inputs)
-    print(f"MSFT DCF (Phase 1.1)")
-    print(f"  Firm value:       ${result.firm_value / 1e9:.1f}B")
-    print(f"  Equity value:     ${result.equity_value / 1e9:.1f}B")
-    print(f"  Per-share value:  ${result.per_share_value:.2f}")
-    print(f"  Terminal value:   ${result.terminal_value / 1e9:.1f}B")
-    print(f"  PV of terminal:   ${result.pv_terminal / 1e9:.1f}B")
-    print(f"  Terminal % of total: {result.pv_terminal / result.firm_value * 100:.0f}%")
+    r = bundle["result"]
+    w = bundle["wacc_info"]
+
+    print(f"\n=== MSFT DCF (Phase 1.2 — real WACC) ===")
+    print(f"\nDiscount rate (WACC): {w['wacc']*100:.2f}%")
+    print(f"  Beta:                  {w['beta']:.3f}")
+    print(f"  Cost of equity:        {w['cost_of_equity']*100:.2f}%")
+    print(f"  After-tax cost of debt: {w['after_tax_cost_of_debt']*100:.2f}%")
+    print(f"  Equity weight:         {w['equity_weight']*100:.1f}%")
+    print(f"  Debt weight:           {w['debt_weight']*100:.1f}%")
+
+    print(f"\nValuation:")
+    print(f"  Firm value:            ${r.firm_value / 1e9:.1f}B")
+    print(f"  Equity value:          ${r.equity_value / 1e9:.1f}B")
+    print(f"  Per-share value:       ${r.per_share_value:.2f}")
+    print(f"  Current market price:  ${bundle['current_price']:.2f}")
+    print(f"  Upside/(downside):     {bundle['upside_downside']*100:+.1f}%")
+    print(f"  Terminal % of total:   {r.pv_terminal / r.firm_value * 100:.0f}%")
