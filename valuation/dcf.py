@@ -160,80 +160,152 @@ def compute_intrinsic_value(inputs: DCFInputs) -> DCFResult:
         pv_terminal=pv_terminal,
     )
 
-def compute_intrinsic_value_for_ticker(
-    ticker,
-    current_fcf,
-    high_growth_rate=0.15,
-    high_growth_years=10,
-    terminal_growth_rate=0.04,
-):
+def compute_intrinsic_value_for_ticker(ticker, bucket="default"):
     """
-    End-to-end DCF for a ticker using real WACC, real shares, real price.
+    End-to-end DCF using three-stage growth + ROIC fade model.
 
-    Pulls all market-derived inputs automatically. Only the growth
-    assumptions are passed in — those still require judgment.
+    Pulls all market-derived inputs:
+        - WACC from real macro + capital structure
+        - Growth profile (year-by-year g, ROIC, reinvestment)
+        - Current EBIT and tax rate from financials
 
     Args:
         ticker: e.g. "MSFT"
-        current_fcf: latest annual FCF in dollars (from our fundamentals DB)
-        high_growth_rate, high_growth_years, terminal_growth_rate: growth assumptions
+        bucket: business model bucket (mature_tech, consumer_defensive, etc.)
 
     Returns:
-        dict with the DCFResult fields plus wacc_info for transparency
+        dict with the full DCF breakdown:
+            firm_value, equity_value, per_share_value,
+            current_price, upside_downside,
+            yearly_cash_flows, pv_explicit, pv_terminal,
+            terminal_value, wacc, growth_profile, data_flags
     """
     from valuation.inputs.wacc import compute_wacc
+    from valuation.inputs.growth import build_growth_profile
+    import yfinance as yf
 
-    # Pull WACC and capital-structure inputs
+    # Step 1: Get WACC, capital structure, and current price
     wacc_info = compute_wacc(ticker)
+    wacc = wacc_info["wacc"]
 
-    # Build DCF inputs from real data
-    inputs = DCFInputs(
-        current_fcf=current_fcf,
-        total_debt=wacc_info["total_debt"],
-        total_cash=0,  # TODO: pull total_cash separately for cleaner net debt
-        shares_outstanding=wacc_info["shares_outstanding"],
-        high_growth_rate=high_growth_rate,
-        high_growth_years=high_growth_years,
-        terminal_growth_rate=terminal_growth_rate,
-        discount_rate=wacc_info["wacc"],
-    )
+    # Step 2: Get growth profile
+    growth = build_growth_profile(ticker, wacc, bucket=bucket)
 
-    # Run the DCF
-    result = compute_intrinsic_value(inputs)
+    # Step 3: Get current EBIT(1-t) — starting cash flow
+    yf_ticker = yf.Ticker(ticker)
+    income_stmt = yf_ticker.income_stmt
+    latest = income_stmt.iloc[:, 0]
+
+    ebit = None
+    for field in ["EBIT", "Operating Income"]:
+        if field in latest.index:
+            ebit = float(latest[field])
+            break
+
+    if ebit is None or ebit <= 0:
+        return {
+            "error": "Could not compute DCF: EBIT unavailable or non-positive",
+            "ticker": ticker,
+            "wacc": wacc,
+            "growth_profile": growth,
+            "data_flags": ["No usable EBIT — DCF cannot be computed for financial companies in current model"],
+        }
+
+    tax_rate = yf_ticker.info.get("effectiveTaxRate") or 0.21
+    starting_nopat = ebit * (1 - tax_rate)
+
+    # Step 4: Project year-by-year cash flows
+    # FCFF_t = NOPAT_t × (1 - reinvestment_rate_t)
+    # NOPAT_t = NOPAT_{t-1} × (1 + growth_rate_t)
+
+    yearly_nopat = []
+    yearly_fcff = []
+    yearly_pv_fcff = []
+
+    current_nopat = starting_nopat
+    for t, (g, reinv) in enumerate(zip(growth["yearly_growth"], growth["yearly_reinvestment"]), start=1):
+        current_nopat = current_nopat * (1 + g)
+        fcff = current_nopat * (1 - reinv)
+        pv_fcff = fcff / ((1 + wacc) ** t)
+
+        yearly_nopat.append(current_nopat)
+        yearly_fcff.append(fcff)
+        yearly_pv_fcff.append(pv_fcff)
+
+    pv_explicit = sum(yearly_pv_fcff)
+
+    # Step 5: Terminal value (Gordon Growth with proper reinvestment formula)
+    # TV = NOPAT_{N+1} × (1 - reinvestment_rate_terminal) / (WACC - g_terminal)
+    n_years = len(growth["yearly_growth"])
+    terminal_nopat = current_nopat * (1 + growth["terminal_growth"])
+    terminal_reinvestment = growth["terminal_reinvestment_rate"]
+    terminal_fcff = terminal_nopat * (1 - terminal_reinvestment)
+    terminal_value = terminal_fcff / (wacc - growth["terminal_growth"])
+    pv_terminal = terminal_value / ((1 + wacc) ** n_years)
+
+    # Step 6: Combine
+    firm_value = pv_explicit + pv_terminal
+
+    # Equity = firm value - net debt
+    # Pull total_cash for proper net debt (was a placeholder before)
+    balance_sheet = yf_ticker.balance_sheet
+    latest_balance = balance_sheet.iloc[:, 0]
+    total_cash = float(latest_balance.get("Cash And Cash Equivalents", 0))
+
+    equity_value = firm_value - wacc_info["total_debt"] + total_cash
+    per_share_value = equity_value / wacc_info["shares_outstanding"]
+
+    current_price = wacc_info["current_price"]
+    upside_downside = (per_share_value - current_price) / current_price
 
     return {
-        "result": result,
-        "wacc_info": wacc_info,
-        "current_price": wacc_info["current_price"],
-        "upside_downside": (result.per_share_value - wacc_info["current_price"])
-                          / wacc_info["current_price"],
+        "ticker": ticker,
+        "bucket": bucket,
+        "firm_value": firm_value,
+        "equity_value": equity_value,
+        "per_share_value": per_share_value,
+        "current_price": current_price,
+        "upside_downside": upside_downside,
+        "pv_explicit": pv_explicit,
+        "pv_terminal": pv_terminal,
+        "terminal_value": terminal_value,
+        "terminal_pct_of_value": pv_terminal / firm_value,
+        "yearly_nopat": yearly_nopat,
+        "yearly_fcff": yearly_fcff,
+        "yearly_pv_fcff": yearly_pv_fcff,
+        "wacc": wacc,
+        "growth_profile": growth,
+        "starting_nopat": starting_nopat,
+        "data_flags": growth["data_flags"],
     }
 
 if __name__ == "__main__":
-    # Phase 1.2: real WACC, real shares, real price
-    bundle = compute_intrinsic_value_for_ticker(
-        ticker="MSFT",
-        current_fcf=37.01e9,
-        high_growth_rate=0.15,
-        high_growth_years=10,
-        terminal_growth_rate=0.04,
-    )
+    result = compute_intrinsic_value_for_ticker("MSFT", bucket="mature_tech")
 
-    r = bundle["result"]
-    w = bundle["wacc_info"]
+    if "error" in result:
+        print(f"\nERROR: {result['error']}")
+    else:
+        print(f"\n=== {result['ticker']} DCF (Three-Stage Model) ===")
 
-    print(f"\n=== MSFT DCF (Phase 1.2 — real WACC) ===")
-    print(f"\nDiscount rate (WACC): {w['wacc']*100:.2f}%")
-    print(f"  Beta:                  {w['beta']:.3f}")
-    print(f"  Cost of equity:        {w['cost_of_equity']*100:.2f}%")
-    print(f"  After-tax cost of debt: {w['after_tax_cost_of_debt']*100:.2f}%")
-    print(f"  Equity weight:         {w['equity_weight']*100:.1f}%")
-    print(f"  Debt weight:           {w['debt_weight']*100:.1f}%")
+        print(f"\nDiscount rate (WACC):  {result['wacc']*100:.2f}%")
+        gp = result['growth_profile']
+        print(f"\nGrowth profile:")
+        print(f"  High-growth period:  {gp['high_growth_years']} years")
+        print(f"  Transition period:   {gp['transition_years']} years")
+        print(f"  Terminal growth:     {gp['terminal_growth']*100:.2f}%")
+        print(f"  Terminal ROIC:       {gp['terminal_roic']*100:.1f}%")
 
-    print(f"\nValuation:")
-    print(f"  Firm value:            ${r.firm_value / 1e9:.1f}B")
-    print(f"  Equity value:          ${r.equity_value / 1e9:.1f}B")
-    print(f"  Per-share value:       ${r.per_share_value:.2f}")
-    print(f"  Current market price:  ${bundle['current_price']:.2f}")
-    print(f"  Upside/(downside):     {bundle['upside_downside']*100:+.1f}%")
-    print(f"  Terminal % of total:   {r.pv_terminal / r.firm_value * 100:.0f}%")
+        print(f"\nValuation:")
+        print(f"  Starting NOPAT:      ${result['starting_nopat']/1e9:.1f}B")
+        print(f"  PV explicit CFs:     ${result['pv_explicit']/1e9:.1f}B  ({(1-result['terminal_pct_of_value'])*100:.0f}%)")
+        print(f"  PV terminal:         ${result['pv_terminal']/1e9:.1f}B  ({result['terminal_pct_of_value']*100:.0f}%)")
+        print(f"  Firm value:          ${result['firm_value']/1e9:.1f}B")
+        print(f"  Equity value:        ${result['equity_value']/1e9:.1f}B")
+        print(f"  Per-share value:     ${result['per_share_value']:.2f}")
+        print(f"  Current price:       ${result['current_price']:.2f}")
+        print(f"  Upside/(downside):   {result['upside_downside']*100:+.1f}%")
+
+        if result['data_flags']:
+            print(f"\nFlags:")
+            for f in result['data_flags']:
+                print(f"  - {f}")
