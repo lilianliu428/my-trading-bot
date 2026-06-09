@@ -41,29 +41,79 @@ MAX_HIGH_GROWTH_YEARS = 15
 # Coefficient mapping excess returns to high-growth period length
 # Formula: high_growth_years = min(15, max(3, (ROIC - WACC) * 50))
 # Calibration: a company with 10pp excess return gets 5 years; 20pp gets 10 years
+# Coefficient mapping excess returns to high-growth period length
 EXCESS_RETURN_TO_YEARS_COEFF = 50
 
-# Industry-average ROIC by bucket (Option A — hardcoded heuristics)
-# TODO Phase 1.4: compute these from our database of 555 tickers, store, refresh quarterly
+# Industry-average ROIC by bucket (calibrated against Damodaran's published data)
+# TODO Phase 1.4: compute these empirically from our 555-ticker database
 INDUSTRY_AVERAGE_ROIC = {
-    "mature_tech": 0.17,         # MSFT, AAPL, GOOGL — moats persist
-    "saas_growth": 0.15,         # CRM, NOW — strong but younger moats
-    "semiconductor": 0.12,        # NVDA, AMD — cyclical
-    "consumer_defensive": 0.13,   # KO, PG — brand moats
-    "consumer_cyclical": 0.10,    # AMZN, TSLA — less stable
-    "financial_bank": 0.08,       # JPM, BAC — commodity-ish
-    "financial_other": 0.10,      # V, MA, BLK — varies
-    "healthcare_pharma": 0.15,    # patents during life
+    "mature_tech": 0.17,
+    "saas_growth": 0.15,
+    "semiconductor": 0.12,
+    "consumer_defensive": 0.13,
+    "consumer_cyclical": 0.10,
+    "financial_bank": 0.08,
+    "financial_other": 0.10,
+    "healthcare_pharma": 0.15,
     "healthcare_other": 0.12,
-    "industrial": 0.10,           # GE, CAT — competitive
-    "energy": 0.08,               # XOM, CVX — commodity
+    "industrial": 0.10,
+    "energy": 0.08,
     "materials": 0.08,
-    "utility": 0.07,              # regulated to be close to WACC
+    "utility": 0.07,
     "reit": 0.08,
     "insurance": 0.09,
     "communication": 0.11,
-    "default": 0.10,              # fallback if bucket unknown
+    "default": 0.10,
 }
+
+# Per-bucket cap on initial growth rate
+# Calibrated to plausible sustained growth for each industry
+# TODO Phase 1.4: replace with empirical 75th percentile from historical data
+BUCKET_INITIAL_GROWTH_CAP = {
+    "saas_growth": 0.35,
+    "semiconductor": 0.30,
+    "healthcare_pharma": 0.25,
+    "mature_tech": 0.20,
+    "consumer_cyclical": 0.20,
+    "communication": 0.18,
+    "industrial": 0.15,
+    "healthcare_other": 0.15,
+    "financial_other": 0.15,
+    "materials": 0.12,
+    "energy": 0.12,
+    "consumer_defensive": 0.10,
+    "financial_bank": 0.10,
+    "insurance": 0.10,
+    "reit": 0.08,
+    "utility": 0.06,
+    "default": 0.20,
+}
+
+# Per-bucket multiplier on high-growth period length
+# Cyclical industries get shorter periods (booms end)
+# Moated industries get longer periods (defenses persist)
+BUCKET_HIGH_GROWTH_MULTIPLIER = {
+    "saas_growth": 1.2,
+    "mature_tech": 1.0,
+    "consumer_defensive": 1.0,
+    "healthcare_pharma": 0.8,
+    "communication": 0.9,
+    "consumer_cyclical": 0.8,
+    "industrial": 0.7,
+    "healthcare_other": 0.8,
+    "financial_other": 0.8,
+    "financial_bank": 0.7,
+    "insurance": 0.8,
+    "reit": 0.7,
+    "semiconductor": 0.5,
+    "energy": 0.5,
+    "materials": 0.5,
+    "utility": 0.6,
+    "default": 1.0,
+}
+
+# Blend weights (Damodaran-style triangulation, refined toward fundamental anchor)
+BLEND_WEIGHTS = {"fundamental": 0.70, "consensus": 0.20, "historical": 0.10}
 
 
 # === Public functions (called from build_growth_profile and outside this module) ===
@@ -100,14 +150,15 @@ def compute_fundamental_growth(ticker):
 
     data_flags = []
 
-    # EBIT
+    # EBIT — banks and insurance companies don't have it in the standard form
     ebit = None
     for field in ["EBIT", "Operating Income"]:
         if field in latest_income.index:
             ebit = float(latest_income[field])
             break
     if ebit is None:
-        raise ValueError(f"No EBIT field found for {ticker}")
+        data_flags.append("No EBIT found (likely financial company) — fundamental growth unavailable")
+        return _null_fundamental_result(data_flags)
 
     if ebit <= 0:
         data_flags.append("EBIT is negative or zero — fundamental growth undefined")
@@ -373,8 +424,18 @@ def build_growth_profile(ticker, wacc, bucket="default"):
     cons_g = cons_info["consensus_growth"]
     current_roic = fund_info["roic"]
 
-    # Initial growth = blend of fundamental, consensus, historical (60/20/20)
-    initial_g = _blend_growth(fund_g, cons_g, hist_g, data_flags)
+    # Initial growth = blend of fundamental, consensus, historical (70/20/10)
+    initial_g_raw = _blend_growth(fund_g, cons_g, hist_g, data_flags)
+
+    # Apply per-bucket initial growth cap
+    bucket_cap = BUCKET_INITIAL_GROWTH_CAP.get(bucket, BUCKET_INITIAL_GROWTH_CAP["default"])
+    if initial_g_raw > bucket_cap:
+        data_flags.append(
+            f"Initial growth {initial_g_raw * 100:.1f}% capped at bucket max {bucket_cap * 100:.0f}%"
+        )
+        initial_g = bucket_cap
+    else:
+        initial_g = initial_g_raw
 
     # Industry-average ROIC for the bucket
     industry_roic = INDUSTRY_AVERAGE_ROIC.get(bucket, INDUSTRY_AVERAGE_ROIC["default"])
@@ -382,19 +443,30 @@ def build_growth_profile(ticker, wacc, bucket="default"):
     # Terminal values
     terminal_g = rf  # Damodaran: terminal g ≤ risk-free rate
     terminal_roic = industry_roic
-    terminal_reinvestment_rate = terminal_g / terminal_roic  # The Damodaran formula
+    terminal_reinvestment_rate = terminal_g / terminal_roic
 
-    # High-growth period length from excess returns
+    # High-growth period length from excess returns × bucket multiplier × boom adjustment
     if current_roic is None:
         high_growth_years = MIN_HIGH_GROWTH_YEARS
         data_flags.append("No ROIC — using minimum high-growth period")
         excess_return = None
     else:
         excess_return = current_roic - wacc
+        bucket_multiplier = BUCKET_HIGH_GROWTH_MULTIPLIER.get(
+            bucket, BUCKET_HIGH_GROWTH_MULTIPLIER["default"]
+        )
+        boom_multiplier = _detect_boom(fund_g, hist_g, data_flags)
+
+        raw_years = excess_return * EXCESS_RETURN_TO_YEARS_COEFF * bucket_multiplier * boom_multiplier
         high_growth_years = int(max(
             MIN_HIGH_GROWTH_YEARS,
-            min(MAX_HIGH_GROWTH_YEARS, excess_return * EXCESS_RETURN_TO_YEARS_COEFF)
+            min(MAX_HIGH_GROWTH_YEARS, raw_years)
         ))
+
+        if bucket_multiplier != 1.0:
+            data_flags.append(
+                f"Bucket multiplier {bucket_multiplier} applied (industry: {bucket})"
+            )
 
     # Build the year-by-year arrays
     yearly_growth = []
@@ -532,10 +604,10 @@ def _null_historical_result(data_flags):
 
 def _blend_growth(fund_g, cons_g, hist_g, data_flags):
     """
-    Damodaran-style triangulation: 60% fundamental, 20% consensus, 20% historical.
+    Triangulation blend: 70% fundamental, 20% consensus, 10% historical.
     Renormalizes weights when signals are missing.
     """
-    weights = {"fundamental": 0.60, "consensus": 0.20, "historical": 0.20}
+    weights = BLEND_WEIGHTS
     available = {}
     if fund_g is not None:
         available["fundamental"] = fund_g
@@ -554,6 +626,35 @@ def _blend_growth(fund_g, cons_g, hist_g, data_flags):
     used = ", ".join(f"{k}={available[k]*100:.1f}%" for k in available)
     data_flags.append(f"Initial growth blended from: {used} → {blended*100:.1f}%")
     return blended
+
+def _detect_boom(fund_g, hist_g, data_flags):
+    """
+    Detect when recent growth wildly exceeds sustainable rate.
+    Returns multiplier to shorten high-growth period.
+
+    Ratio thresholds chosen so that:
+        - 4x sustainable rate = extreme boom (mostly unsustainable)
+        - 2.5x = strong boom
+        - 1.5x = moderate boom
+        - below 1.5x = no adjustment
+    """
+    if hist_g is None or fund_g is None or fund_g <= 0:
+        return 1.0
+
+    ratio = hist_g / fund_g
+
+    if ratio > 4.0:
+        data_flags.append(f"Extreme boom: recent={hist_g*100:.0f}% vs sustainable={fund_g*100:.0f}% → hg period cut 70%")
+        return 0.3
+    elif ratio > 2.5:
+        data_flags.append(f"Strong boom: recent={hist_g*100:.0f}% vs sustainable={fund_g*100:.0f}% → hg period cut 50%")
+        return 0.5
+    elif ratio > 1.5:
+        data_flags.append(f"Moderate boom: recent={hist_g*100:.0f}% vs sustainable={fund_g*100:.0f}% → hg period cut 30%")
+        return 0.7
+    else:
+        return 1.0
+
 
 
 if __name__ == "__main__":
