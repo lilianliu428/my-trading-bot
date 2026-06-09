@@ -412,15 +412,35 @@ def build_growth_profile(ticker, num_years=10):
     data_flags.extend(hist_info["data_flags"])
     data_flags.extend(cons_info["data_flags"])
 
-    # Decide on near-term growth (years 1-2)
+    # === Decide on near-term growth (years 1-2) ===
+    # Damodaran's triangulation: weighted blend of three signals
+    #   60% fundamental (most defensible — derived from operating economics)
+    #   20% consensus    (market expectation, but analysts skew optimistic)
+    #   20% historical   (recent reality)
+    # If a signal is missing, we redistribute its weight proportionally.
+    weights = {"fundamental": 0.60, "consensus": 0.20, "historical": 0.20}
+    available = {}
+    if fund_g is not None:
+        available["fundamental"] = fund_g
     if cons_g is not None:
-        near_term_g = cons_g
-    elif hist_g is not None:
-        near_term_g = hist_g
-        data_flags.append("No consensus; using historical as near-term")
+        available["consensus"] = cons_g
+    if hist_g is not None:
+        available["historical"] = hist_g
+
+    if not available:
+        data_flags.append("No growth signals available — defaulting to GDP cap")
+        near_term_g = GDP_TERMINAL_CAP
     else:
-        near_term_g = fund_g
-        data_flags.append("No consensus or historical; using fundamental as near-term")
+        # Renormalize weights over only the signals we actually have
+        total_available_weight = sum(weights[k] for k in available)
+        near_term_g = sum(
+            (weights[k] / total_available_weight) * available[k]
+            for k in available
+        )
+        used_signals = ", ".join(
+            f"{k}={available[k] * 100:.1f}%" for k in available
+        )
+        data_flags.append(f"Blended near-term from: {used_signals}")
 
     # Decide on long-term fundamental rate
     if fund_g is not None:
