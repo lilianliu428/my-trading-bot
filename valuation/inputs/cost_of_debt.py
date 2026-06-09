@@ -83,12 +83,27 @@ def compute_cost_of_debt(ticker, risk_free_rate):
     latest = income_stmt.iloc[:, 0]
 
     # EBIT (Operating Income)
+    # TODO Phase 1.4: build proper bank/insurance valuation framework
+    # Banks should use FCFE + cost of equity, not FCFF + WACC
+    # See Damodaran "Valuing Financial Service Firms" chapter
     if "EBIT" in latest.index:
         ebit = float(latest["EBIT"])
     elif "Operating Income" in latest.index:
         ebit = float(latest["Operating Income"])
     else:
-        raise ValueError(f"No EBIT/Operating Income found for {ticker}")
+        print(f"  WARNING: No EBIT for {ticker} (likely financial company); using default A rating")
+        return {
+            "ticker": ticker,
+            "ebit": None,
+            "interest_expense": None,
+            "interest_coverage": None,
+            "synthetic_rating": "A",
+            "credit_spread": 0.0120,
+            "pre_tax_cost_of_debt": risk_free_rate + 0.0120,
+            "tax_rate": 0.21,
+            "after_tax_cost_of_debt": (risk_free_rate + 0.0120) * (1 - 0.21),
+            "data_flag": "no_ebit_fallback",
+        }
 
     # Interest Expense (always positive number in yfinance)
     if "Interest Expense" in latest.index:
