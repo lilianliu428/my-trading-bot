@@ -1,31 +1,76 @@
 """
-Growth modeling for DCF.
+Growth modeling for DCF — three-stage model with ROIC fade.
 
-Replaces hardcoded growth rates with defensible estimates derived from:
-    1. Fundamental growth (g = reinvestment_rate × ROIC) — sustainable rate
-    2. Historical growth (last 5 years FCF) — sanity check
-    3. Consensus growth (analyst estimates) — near-term anchor
-    4. Growth fade — combines into year-by-year profile
+Architecture:
+    Stage 1 (Years 1 to N1):  High growth — current rates persist
+    Stage 2 (Years N1+1 to N2): Transition — g and ROIC fade linearly
+    Stage 3 (Year N2+1+):     Stable — g = rf, ROIC = industry average
 
-This module is the conceptual heart of Pillar 1.3.
+Key decisions backed by Damodaran (Investment Valuation, Ch. 11-12):
+    - Terminal growth ≤ risk-free rate (long-run economic growth proxy)
+    - Reinvestment rate in stable growth = g / ROIC (formula, not guess)
+    - ROIC fades toward industry average, not WACC (moats are real)
+    - High-growth period length proportional to excess returns
+
+Modules:
+    compute_fundamental_growth(ticker)   — g = reinvestment × ROIC from financials
+    compute_historical_growth(ticker)    — log-linear regression on FCF (revenue fallback)
+    get_consensus_growth(ticker)         — analyst estimates from yfinance
+    build_growth_profile(ticker)         — three-stage orchestration
 """
 
-import yfinance as yf
 import math
+import numpy as np
+import yfinance as yf
+
+from valuation.data_sources.fred import get_risk_free_rate
 
 
-# Terminal growth cap — no company can grow faster than the economy forever
-# US nominal GDP growth (real GDP + inflation) typically 3-5%
-# We use 4% as a defensible ceiling
-GDP_TERMINAL_CAP = 0.04
+# === Constants ===
 
-# US federal corporate tax rate, used as fallback if yfinance doesn't return one
+# US federal corporate tax rate, fallback if yfinance returns nothing
 DEFAULT_TAX_RATE = 0.21
 
+# Transition period length (Damodaran-compatible: 5 years when transitions are used)
+TRANSITION_YEARS = 5
+
+# High-growth period bounds (years)
+MIN_HIGH_GROWTH_YEARS = 3
+MAX_HIGH_GROWTH_YEARS = 15
+
+# Coefficient mapping excess returns to high-growth period length
+# Formula: high_growth_years = min(15, max(3, (ROIC - WACC) * 50))
+# Calibration: a company with 10pp excess return gets 5 years; 20pp gets 10 years
+EXCESS_RETURN_TO_YEARS_COEFF = 50
+
+# Industry-average ROIC by bucket (Option A — hardcoded heuristics)
+# TODO Phase 1.4: compute these from our database of 555 tickers, store, refresh quarterly
+INDUSTRY_AVERAGE_ROIC = {
+    "mature_tech": 0.17,         # MSFT, AAPL, GOOGL — moats persist
+    "saas_growth": 0.15,         # CRM, NOW — strong but younger moats
+    "semiconductor": 0.12,        # NVDA, AMD — cyclical
+    "consumer_defensive": 0.13,   # KO, PG — brand moats
+    "consumer_cyclical": 0.10,    # AMZN, TSLA — less stable
+    "financial_bank": 0.08,       # JPM, BAC — commodity-ish
+    "financial_other": 0.10,      # V, MA, BLK — varies
+    "healthcare_pharma": 0.15,    # patents during life
+    "healthcare_other": 0.12,
+    "industrial": 0.10,           # GE, CAT — competitive
+    "energy": 0.08,               # XOM, CVX — commodity
+    "materials": 0.08,
+    "utility": 0.07,              # regulated to be close to WACC
+    "reit": 0.08,
+    "insurance": 0.09,
+    "communication": 0.11,
+    "default": 0.10,              # fallback if bucket unknown
+}
+
+
+# === Public functions (called from build_growth_profile and outside this module) ===
 
 def compute_fundamental_growth(ticker):
     """
-    Compute sustainable growth rate using fundamental analysis.
+    Compute sustainable growth rate using fundamentals.
 
     Formula:
         g = reinvestment_rate × ROIC
@@ -36,21 +81,8 @@ def compute_fundamental_growth(ticker):
         Invested Capital = Total Equity + Total Debt - Cash
 
     Returns:
-        dict with:
-            ebit_after_tax (float): EBIT × (1 - tax_rate)
-            reinvestment (float): dollars reinvested (numerator of reinvestment rate)
-            reinvestment_rate (float): as decimal, e.g. 0.40 = 40%
-            invested_capital (float): denominator of ROIC
-            roic (float): as decimal, e.g. 0.30 = 30%
-            fundamental_growth (float): reinvestment_rate × roic, the answer
-            tax_rate (float): used in computation
-            data_flags (list): any warnings about edge cases (negative values, etc.)
-
-    Notes:
-        - We use latest annual financial statements (not TTM)
-        - If reinvestment is negative (rare), we set rate to 0 (can't have negative
-          sustainable growth from reinvestment)
-        - If EBIT is negative, fundamental growth is undefined (we return None)
+        dict with: ebit_after_tax, reinvestment, reinvestment_rate,
+                   invested_capital, roic, fundamental_growth, tax_rate, data_flags
     """
     print(f"  Computing fundamental growth for {ticker}...")
     yf_ticker = yf.Ticker(ticker)
@@ -61,21 +93,14 @@ def compute_fundamental_growth(ticker):
     if any(df is None or df.empty for df in [income_stmt, balance_sheet, cash_flow]):
         raise ValueError(f"Missing financial statement data for {ticker}")
 
-    # Get most recent annual values (first column in yfinance)
     latest_income = income_stmt.iloc[:, 0]
     latest_balance = balance_sheet.iloc[:, 0]
     latest_cashflow = cash_flow.iloc[:, 0]
-
-    # Also get previous year for working capital change
-    if income_stmt.shape[1] >= 2:
-        prev_balance = balance_sheet.iloc[:, 1]
-    else:
-        prev_balance = None
+    prev_balance = balance_sheet.iloc[:, 1] if income_stmt.shape[1] >= 2 else None
 
     data_flags = []
 
-    # === Step 1: Get EBIT ===
-    # Try multiple field names yfinance uses
+    # EBIT
     ebit = None
     for field in ["EBIT", "Operating Income"]:
         if field in latest_income.index:
@@ -86,32 +111,18 @@ def compute_fundamental_growth(ticker):
 
     if ebit <= 0:
         data_flags.append("EBIT is negative or zero — fundamental growth undefined")
-        return {
-            "ebit_after_tax": None,
-            "reinvestment": None,
-            "reinvestment_rate": None,
-            "invested_capital": None,
-            "roic": None,
-            "fundamental_growth": None,
-            "tax_rate": None,
-            "data_flags": data_flags,
-        }
+        return _null_fundamental_result(data_flags)
 
-    # === Step 2: Tax rate ===
+    # Tax rate
     info = yf_ticker.info
     tax_rate = info.get("effectiveTaxRate") or DEFAULT_TAX_RATE
+    ebit_after_tax = ebit * (1 - tax_rate)
 
-    # === Step 3: After-tax EBIT (NOPAT — Net Operating Profit After Tax) ===
-    ebit_after_tax = ebit*(1-tax_rate)
-
-    # === Step 4: Capex and Depreciation ===
-    # yfinance field names:
-    #   "Capital Expenditure" (usually NEGATIVE in yfinance — money outflow)
-    #   "Depreciation Amortization Depletion" or "Depreciation And Amortization"
+    # Capex and depreciation
     capex = None
     for field in ["Capital Expenditure", "Capital Expenditures"]:
         if field in latest_cashflow.index:
-            capex = abs(float(latest_cashflow[field]))  # take absolute value
+            capex = abs(float(latest_cashflow[field]))
             break
     if capex is None:
         raise ValueError(f"No capex field found for {ticker}")
@@ -124,9 +135,7 @@ def compute_fundamental_growth(ticker):
     if depreciation is None:
         raise ValueError(f"No depreciation field found for {ticker}")
 
-    # === Step 5: Change in working capital ===
-    # Working capital = Current Assets - Current Liabilities
-    # We need: this year's WC minus last year's WC
+    # Change in working capital
     def working_capital(balance):
         ca = balance.get("Current Assets")
         cl = balance.get("Current Liabilities")
@@ -143,21 +152,16 @@ def compute_fundamental_growth(ticker):
     else:
         change_in_wc = wc_current - wc_prev
 
-    # === Step 6: Reinvestment ===
-    # Formula: reinvestment = capex - depreciation + ΔWC
-    reinvestment = capex-depreciation+change_in_wc
+    reinvestment = capex - depreciation + change_in_wc
 
-    # === Step 7: Reinvestment rate ===
-    # reinvestment_rate = reinvestment / ebit_after_tax
-    # Handle the edge case where reinvestment is negative (clamp to 0)
+    # Reinvestment rate — clamp to 0 if negative
     if reinvestment < 0:
         reinvestment_rate = 0
         data_flags.append("Negative reinvestment — clamped to 0")
     else:
         reinvestment_rate = reinvestment / ebit_after_tax
 
-    # === Step 8: Invested capital ===
-    # Invested Capital = Total Equity + Total Debt - Cash
+    # Invested capital
     total_equity = None
     for field in ["Stockholders Equity", "Total Equity Gross Minority Interest", "Common Stock Equity"]:
         if field in latest_balance.index:
@@ -168,15 +172,14 @@ def compute_fundamental_growth(ticker):
 
     total_debt = float(latest_balance.get("Total Debt", 0))
     cash = float(latest_balance.get("Cash And Cash Equivalents", 0))
-
     invested_capital = total_equity + total_debt - cash
 
     if invested_capital <= 0:
         data_flags.append("Invested capital is negative or zero — ROIC undefined")
         return {
             "ebit_after_tax": ebit_after_tax,
-            "reinvestment": None,
-            "reinvestment_rate": None,
+            "reinvestment": reinvestment,
+            "reinvestment_rate": reinvestment_rate,
             "invested_capital": invested_capital,
             "roic": None,
             "fundamental_growth": None,
@@ -184,12 +187,7 @@ def compute_fundamental_growth(ticker):
             "data_flags": data_flags,
         }
 
-    # === Step 9: ROIC ===
-    # ROIC = ebit_after_tax / invested_capital
-    roic = ebit_after_tax/invested_capital
-
-    # === Step 10: Fundamental growth ===
-    # g = reinvestment_rate × roic
+    roic = ebit_after_tax / invested_capital
     fundamental_growth = reinvestment_rate * roic
 
     return {
@@ -206,35 +204,31 @@ def compute_fundamental_growth(ticker):
 
 def compute_historical_growth(ticker, years=5):
     """
-    Compute average annual FCF growth over the last N years.
+    Estimate historical growth using log-linear regression.
 
-    Sanity check vs fundamental growth. If they're wildly different,
-    something interesting is happening (margin expansion, one-time events,
-    business model change, etc.).
+    Why log-linear: uses all data points, robust to single-year outliers.
+    More accurate than geometric mean (which uses only first/last values)
+    or arithmetic mean (which is biased by spikes).
 
-    Method: pull the last N+1 years of FCF, compute year-over-year growth
-    rates, return the median (more robust than mean since it ignores outliers).
+    Fallback chain:
+        1. Log-linear regression on FCF (if all positive)
+        2. Log-linear regression on revenue (if FCF has any negatives)
+        3. None (if neither has enough data)
 
     Returns:
-        dict with:
-            fcf_series (list): the actual FCF values used
-            yoy_growth_rates (list): year-over-year growth rates
-            median_growth (float): the answer
-            n_years (int): how many growth rates we computed
-            data_flags (list): warnings
+        dict with: series_used, method_used, growth_rate, r_squared, n_years, data_flags
     """
     print(f"  Computing historical growth for {ticker}...")
     yf_ticker = yf.Ticker(ticker)
     cash_flow = yf_ticker.cashflow
 
-    if cash_flow is None or cash_flow.empty:
-        raise ValueError(f"No cash flow data for {ticker}")
-
     data_flags = []
 
-    # yfinance returns most recent year as first column. Iterate columns
-    # left-to-right to get most recent first; reverse to get oldest first.
+    if cash_flow is None or cash_flow.empty:
+        data_flags.append("No cash flow data")
+        return _try_revenue_growth(ticker, years, data_flags)
 
+    # Extract FCF series, chronological order
     fcf_values = []
     for col in cash_flow.columns:
         col_data = cash_flow[col]
@@ -243,181 +237,304 @@ def compute_historical_growth(ticker, years=5):
             if field in col_data.index:
                 fcf = float(col_data[field])
                 break
-        # Some versions don't have FCF directly — derive from operating CF - capex
         if fcf is None:
             ocf = col_data.get("Operating Cash Flow") or col_data.get("Cash Flow From Continuing Operating Activities")
             capex_val = col_data.get("Capital Expenditure")
             if ocf is not None and capex_val is not None:
                 fcf = float(ocf) + float(capex_val)
-
-        # Filter out NaN and None
         if fcf is None or math.isnan(fcf):
             continue
         fcf_values.append(fcf)
 
-    # Reverse so oldest is first, newest is last
-    fcf_values = fcf_values[::-1]
-
-    # Limit to last N+1 years (for N growth rates)
+    fcf_values = fcf_values[::-1]  # chronological order
     if len(fcf_values) > years + 1:
         fcf_values = fcf_values[-(years + 1):]
 
-    if len(fcf_values) < 2:
-        data_flags.append("Not enough FCF history to compute growth")
-        return {
-            "fcf_series": fcf_values,
-            "yoy_growth_rates": [],
-            "median_growth": None,
-            "n_years": 0,
-            "data_flags": data_flags,
-        }
+    # Check usability
+    if any(v <= 0 for v in fcf_values):
+        data_flags.append("FCF series has non-positive values — falling back to revenue")
+        return _try_revenue_growth(ticker, years, data_flags)
 
-    # Compute year-over-year growth rates
-    yoy_growth_rates = []
-    for i in range(1, len(fcf_values)):
-        prev_fcf = fcf_values[i - 1]
-        curr_fcf = fcf_values[i]
-        # Skip if prior year was zero/negative (can't compute % growth meaningfully)
-        if prev_fcf <= 0:
-            data_flags.append(f"Skipping year {i}: prior FCF was non-positive")
-            continue
-        growth = (curr_fcf - prev_fcf) / prev_fcf
-        yoy_growth_rates.append(growth)
+    if len(fcf_values) < 3:
+        data_flags.append("Not enough FCF data for regression — falling back to revenue")
+        return _try_revenue_growth(ticker, years, data_flags)
 
-    if not yoy_growth_rates:
-        return {
-            "fcf_series": fcf_values,
-            "yoy_growth_rates": [],
-            "median_growth": None,
-            "n_years": 0,
-            "data_flags": data_flags,
-        }
-
-    # Median is more robust than mean — ignores outliers
-    sorted_rates = sorted(yoy_growth_rates)
-    n = len(sorted_rates)
-    if n % 2 == 1:
-        median_growth = sorted_rates[n // 2]
-    else:
-        median_growth = (sorted_rates[n // 2 - 1] + sorted_rates[n // 2]) / 2
+    growth_rate, r_squared = _log_linear_regression(fcf_values)
 
     return {
-        "fcf_series": fcf_values,
-        "yoy_growth_rates": yoy_growth_rates,
-        "median_growth": median_growth,
-        "n_years": len(yoy_growth_rates),
+        "series_used": fcf_values,
+        "method_used": "log_linear_fcf",
+        "growth_rate": growth_rate,
+        "r_squared": r_squared,
+        "n_years": len(fcf_values),
         "data_flags": data_flags,
     }
 
 
 def get_consensus_growth(ticker):
     """
-    Pull near-term growth expectations from analyst consensus via yfinance.
+    Near-term growth from analyst consensus (yfinance).
 
-    Tries multiple sources in order of preference:
-        1. 5-year forward earnings growth estimate (if available)
-        2. Forward revenue growth (next fiscal year)
-        3. Latest TTM revenue growth (fallback)
+    Tries: long-term earnings growth → next-year earnings growth → revenue growth.
 
     Returns:
-        dict with:
-            consensus_growth (float): the estimate as decimal
-            source (str): which estimate was used
-            data_flags (list): warnings
+        dict with: consensus_growth, source, n_analysts, data_flags
     """
     print(f"  Fetching consensus growth for {ticker}...")
     yf_ticker = yf.Ticker(ticker)
     info = yf_ticker.info
 
     data_flags = []
+    n_analysts = info.get("numberOfAnalystOpinions")
 
-    # 5-year forward earnings growth (from analyst consensus)
-    earnings_growth_5y = info.get("earningsGrowth")  # next-year EPS growth
-    # Note: yfinance's "earningsGrowth" is usually next-year, not 5-year.
-    # True 5-year estimates are in info.get("earningsQuarterlyGrowth") or
-    # accessible via .analyst_price_target — varies by version.
-
-    # Try the long-term growth field first
     consensus = info.get("earningsQuarterlyGrowth")
-    source = "earningsQuarterlyGrowth (next quarter consensus)"
+    source = "earningsQuarterlyGrowth"
 
-    # Fall back to next-year earnings growth
     if consensus is None or consensus <= 0:
         consensus = info.get("earningsGrowth")
-        source = "earningsGrowth (next year consensus)"
+        source = "earningsGrowth (next year)"
 
-    # Fall back to revenue growth as proxy
     if consensus is None or consensus <= 0:
         consensus = info.get("revenueGrowth")
-        source = "revenueGrowth (TTM, fallback)"
-        data_flags.append("Using TTM revenue growth as proxy — no forward estimate available")
+        source = "revenueGrowth (TTM)"
+        data_flags.append("Using TTM revenue growth — no forward consensus")
 
     if consensus is None:
         data_flags.append("No consensus growth available")
         return {
             "consensus_growth": None,
             "source": None,
+            "n_analysts": n_analysts,
             "data_flags": data_flags,
         }
 
-    # Sanity-check: cap absurd values
+    # Sanity guards
     if consensus > 0.50:
-        data_flags.append(f"Consensus growth {consensus*100:.0f}% seems implausible — capping at 30%")
+        data_flags.append(f"Consensus {consensus*100:.0f}% implausible — capped at 30%")
         consensus = 0.30
     if consensus < -0.20:
-        data_flags.append(f"Consensus growth {consensus*100:.0f}% deeply negative — capping at -10%")
+        data_flags.append(f"Consensus {consensus*100:.0f}% deeply negative — capped at -10%")
         consensus = -0.10
 
     return {
         "consensus_growth": consensus,
         "source": source,
+        "n_analysts": n_analysts,
         "data_flags": data_flags,
     }
 
 
-def build_growth_profile(ticker, num_years=10):
+def build_growth_profile(ticker, wacc, bucket="default"):
     """
-    Combine all growth signals into a year-by-year DCF growth schedule.
+    Build three-stage growth profile per Damodaran's framework.
 
-    Strategy:
-        Year 1-2: consensus growth (what analysts/market expect near-term)
-        Year 3 to num_years: linear fade from consensus to fundamental
-        Terminal: min(fundamental, GDP cap) — capped because no company
-                  can grow faster than the economy forever
+    Stage 1 (Years 1 to N1): High growth at current fundamental rate
+    Stage 2 (Years N1+1 to N2): Transition — linear fade of g and ROIC
+    Stage 3 (Year N2+1+): Stable — g = rf, ROIC = industry average
+
+    Reinvestment rate in stable growth = g_stable / roic_stable (Damodaran formula).
+
+    Args:
+        ticker: e.g. "MSFT"
+        wacc: weighted average cost of capital (decimal), used for excess returns
+        bucket: business model bucket from our tagging system (mature_tech, etc.)
 
     Returns:
         dict with:
-            yearly_growth (list of floats, length num_years): year-by-year rates
-            terminal_growth (float): used in Gordon Growth terminal value
-            fundamental_growth (float): the sustainable rate
-            consensus_growth (float): the near-term anchor
-            historical_growth (float): the sanity check
-            roic (float)
-            excess_return (float): roic - wacc proxy; positive = value creator
+            yearly_growth (list): year-by-year growth for high-growth + transition
+            yearly_roic (list): year-by-year ROIC corresponding to above
+            yearly_reinvestment (list): year-by-year reinvestment rate
+            terminal_growth (float)
+            terminal_roic (float)
+            terminal_reinvestment_rate (float)
+            high_growth_years (int)
+            transition_years (int)
+            fundamental_growth, consensus_growth, historical_growth (floats)
+            current_roic, industry_roic (floats)
+            excess_return (float): current ROIC - WACC
+            r_squared_historical (float)
             data_flags (list)
     """
-    print(f"\n  === Building growth profile for {ticker} ===")
+    print(f"\n  === Building growth profile for {ticker} (bucket: {bucket}) ===")
 
-    # Pull all three growth signals
+    # Pull all signals
     fund_info = compute_fundamental_growth(ticker)
     hist_info = compute_historical_growth(ticker)
     cons_info = get_consensus_growth(ticker)
-
-    fund_g = fund_info["fundamental_growth"]
-    hist_g = hist_info["median_growth"]
-    cons_g = cons_info["consensus_growth"]
+    rf = get_risk_free_rate()
 
     data_flags = []
     data_flags.extend(fund_info["data_flags"])
     data_flags.extend(hist_info["data_flags"])
     data_flags.extend(cons_info["data_flags"])
 
-    # === Decide on near-term growth (years 1-2) ===
-    # Damodaran's triangulation: weighted blend of three signals
-    #   60% fundamental (most defensible — derived from operating economics)
-    #   20% consensus    (market expectation, but analysts skew optimistic)
-    #   20% historical   (recent reality)
-    # If a signal is missing, we redistribute its weight proportionally.
+    fund_g = fund_info["fundamental_growth"]
+    hist_g = hist_info["growth_rate"]
+    cons_g = cons_info["consensus_growth"]
+    current_roic = fund_info["roic"]
+
+    # Initial growth = blend of fundamental, consensus, historical (60/20/20)
+    initial_g = _blend_growth(fund_g, cons_g, hist_g, data_flags)
+
+    # Industry-average ROIC for the bucket
+    industry_roic = INDUSTRY_AVERAGE_ROIC.get(bucket, INDUSTRY_AVERAGE_ROIC["default"])
+
+    # Terminal values
+    terminal_g = rf  # Damodaran: terminal g ≤ risk-free rate
+    terminal_roic = industry_roic
+    terminal_reinvestment_rate = terminal_g / terminal_roic  # The Damodaran formula
+
+    # High-growth period length from excess returns
+    if current_roic is None:
+        high_growth_years = MIN_HIGH_GROWTH_YEARS
+        data_flags.append("No ROIC — using minimum high-growth period")
+        excess_return = None
+    else:
+        excess_return = current_roic - wacc
+        high_growth_years = int(max(
+            MIN_HIGH_GROWTH_YEARS,
+            min(MAX_HIGH_GROWTH_YEARS, excess_return * EXCESS_RETURN_TO_YEARS_COEFF)
+        ))
+
+    # Build the year-by-year arrays
+    yearly_growth = []
+    yearly_roic = []
+    yearly_reinvestment = []
+
+    # Stage 1: High growth, constant rates
+    stage1_roic = current_roic if current_roic is not None else industry_roic
+    stage1_reinv = (initial_g / stage1_roic) if stage1_roic > 0 else 0
+
+    for year in range(1, high_growth_years + 1):
+        yearly_growth.append(initial_g)
+        yearly_roic.append(stage1_roic)
+        yearly_reinvestment.append(stage1_reinv)
+
+    # Stage 2: Transition — linear fade across all three variables
+    for i in range(1, TRANSITION_YEARS + 1):
+        progress = i / TRANSITION_YEARS  # 0 → 1 across transition
+        g = initial_g + progress * (terminal_g - initial_g)
+        roic = stage1_roic + progress * (terminal_roic - stage1_roic)
+        reinvestment = g / roic if roic > 0 else 0
+        yearly_growth.append(g)
+        yearly_roic.append(roic)
+        yearly_reinvestment.append(reinvestment)
+
+    return {
+        "yearly_growth": yearly_growth,
+        "yearly_roic": yearly_roic,
+        "yearly_reinvestment": yearly_reinvestment,
+        "terminal_growth": terminal_g,
+        "terminal_roic": terminal_roic,
+        "terminal_reinvestment_rate": terminal_reinvestment_rate,
+        "high_growth_years": high_growth_years,
+        "transition_years": TRANSITION_YEARS,
+        "fundamental_growth": fund_g,
+        "consensus_growth": cons_g,
+        "historical_growth": hist_g,
+        "current_roic": current_roic,
+        "industry_roic": industry_roic,
+        "excess_return": excess_return,
+        "r_squared_historical": hist_info.get("r_squared"),
+        "n_analysts": cons_info.get("n_analysts"),
+        "data_flags": data_flags,
+    }
+
+
+# === Private helpers ===
+
+def _null_fundamental_result(data_flags):
+    """Return-shaped null for failed fundamental computation."""
+    return {
+        "ebit_after_tax": None,
+        "reinvestment": None,
+        "reinvestment_rate": None,
+        "invested_capital": None,
+        "roic": None,
+        "fundamental_growth": None,
+        "tax_rate": None,
+        "data_flags": data_flags,
+    }
+
+
+def _log_linear_regression(values):
+    """
+    Fit ln(value) = α + β·t. Returns (annual_growth, r_squared).
+    Assumes values are all positive.
+    """
+    n = len(values)
+    t = np.arange(n)
+    log_values = np.log(values)
+
+    beta, alpha = np.polyfit(t, log_values, deg=1)
+    growth_rate = float(np.exp(beta) - 1)
+
+    predicted = alpha + beta * t
+    ss_residual = np.sum((log_values - predicted) ** 2)
+    ss_total = np.sum((log_values - np.mean(log_values)) ** 2)
+    r_squared = float(1 - ss_residual / ss_total) if ss_total > 0 else 0.0
+
+    return growth_rate, r_squared
+
+
+def _try_revenue_growth(ticker, years, data_flags):
+    """Fallback: log-linear regression on revenue when FCF unusable."""
+    yf_ticker = yf.Ticker(ticker)
+    income_stmt = yf_ticker.income_stmt
+
+    if income_stmt is None or income_stmt.empty:
+        data_flags.append("No income statement for revenue fallback")
+        return _null_historical_result(data_flags)
+
+    revenue_values = []
+    for col in income_stmt.columns:
+        col_data = income_stmt[col]
+        rev = None
+        for field in ["Total Revenue", "Revenue", "Operating Revenue"]:
+            if field in col_data.index:
+                rev = float(col_data[field])
+                break
+        if rev is None or math.isnan(rev) or rev <= 0:
+            continue
+        revenue_values.append(rev)
+
+    revenue_values = revenue_values[::-1]
+    if len(revenue_values) > years + 1:
+        revenue_values = revenue_values[-(years + 1):]
+
+    if len(revenue_values) < 3:
+        data_flags.append("Not enough revenue data for regression")
+        return _null_historical_result(data_flags)
+
+    growth_rate, r_squared = _log_linear_regression(revenue_values)
+
+    return {
+        "series_used": revenue_values,
+        "method_used": "log_linear_revenue",
+        "growth_rate": growth_rate,
+        "r_squared": r_squared,
+        "n_years": len(revenue_values),
+        "data_flags": data_flags,
+    }
+
+
+def _null_historical_result(data_flags):
+    """Return-shaped null for failed historical computation."""
+    return {
+        "series_used": [],
+        "method_used": None,
+        "growth_rate": None,
+        "r_squared": None,
+        "n_years": 0,
+        "data_flags": data_flags,
+    }
+
+
+def _blend_growth(fund_g, cons_g, hist_g, data_flags):
+    """
+    Damodaran-style triangulation: 60% fundamental, 20% consensus, 20% historical.
+    Renormalizes weights when signals are missing.
+    """
     weights = {"fundamental": 0.60, "consensus": 0.20, "historical": 0.20}
     available = {}
     if fund_g is not None:
@@ -428,86 +545,65 @@ def build_growth_profile(ticker, num_years=10):
         available["historical"] = hist_g
 
     if not available:
-        data_flags.append("No growth signals available — defaulting to GDP cap")
-        near_term_g = GDP_TERMINAL_CAP
-    else:
-        # Renormalize weights over only the signals we actually have
-        total_available_weight = sum(weights[k] for k in available)
-        near_term_g = sum(
-            (weights[k] / total_available_weight) * available[k]
-            for k in available
-        )
-        used_signals = ", ".join(
-            f"{k}={available[k] * 100:.1f}%" for k in available
-        )
-        data_flags.append(f"Blended near-term from: {used_signals}")
+        data_flags.append("No growth signals — using risk-free rate as initial growth")
+        return get_risk_free_rate()
 
-    # Decide on long-term fundamental rate
-    if fund_g is not None:
-        long_term_g = fund_g
-    elif hist_g is not None:
-        long_term_g = hist_g
-        data_flags.append("No fundamental; using historical as long-term")
-    else:
-        # Last resort — use 4% terminal cap
-        long_term_g = GDP_TERMINAL_CAP
-        data_flags.append("No reliable growth estimate; defaulting to GDP cap")
+    total_weight = sum(weights[k] for k in available)
+    blended = sum((weights[k] / total_weight) * available[k] for k in available)
 
-    # Build the year-by-year profile
-    yearly_growth = []
-    fade_start_year = 2  # years 1 and 2 are near-term; year 3 starts the fade
-    fade_end_year = num_years  # last year reaches long_term_g
-
-    for year in range(1, num_years + 1):
-        if year <= fade_start_year:
-            # Near-term: use consensus
-            g = near_term_g
-        else:
-            # Linear fade from near_term_g to long_term_g
-            # year 3 → mostly near-term
-            # year num_years → mostly long-term
-            fade_progress = (year - fade_start_year) / (fade_end_year - fade_start_year)
-            g = near_term_g + fade_progress * (long_term_g - near_term_g)
-        yearly_growth.append(g)
-
-    # Terminal growth: cap at GDP
-    if long_term_g is None:
-        terminal_growth = GDP_TERMINAL_CAP
-    else:
-        terminal_growth = min(long_term_g, GDP_TERMINAL_CAP)
-
-    return {
-        "yearly_growth": yearly_growth,
-        "terminal_growth": terminal_growth,
-        "fundamental_growth": fund_g,
-        "consensus_growth": cons_g,
-        "historical_growth": hist_g,
-        "roic": fund_info.get("roic"),
-        "reinvestment_rate": fund_info.get("reinvestment_rate"),
-        "data_flags": data_flags,
-    }
+    used = ", ".join(f"{k}={available[k]*100:.1f}%" for k in available)
+    data_flags.append(f"Initial growth blended from: {used} → {blended*100:.1f}%")
+    return blended
 
 
 if __name__ == "__main__":
-    profile = build_growth_profile("MSFT")
+    from valuation.inputs.wacc import compute_wacc
 
-    print(f"\n=== MSFT Growth Profile ===")
+    wacc_info = compute_wacc("MSFT")
+    wacc = wacc_info["wacc"]
+
+    profile = build_growth_profile("MSFT", wacc, bucket="mature_tech")
+
+    print(f"\n=== MSFT Growth Profile (Three-Stage) ===\n")
+    print(f"Inputs:")
+    print(f"  Current ROIC:        {profile['current_roic']*100:.1f}%")
+    print(f"  Industry ROIC:       {profile['industry_roic']*100:.1f}%")
+    print(f"  WACC:                {wacc*100:.2f}%")
+    print(f"  Excess return:       {profile['excess_return']*100:+.2f}pp")
+    print(f"  Risk-free rate:      {get_risk_free_rate()*100:.2f}%")
+
     print(f"\nGrowth signals:")
-    if profile["fundamental_growth"] is not None:
-        print(f"  Fundamental (g = reinvest × ROIC): {profile['fundamental_growth']*100:.1f}%")
-        print(f"    ROIC:               {profile['roic']*100:.1f}%")
-        print(f"    Reinvestment rate:  {profile['reinvestment_rate']*100:.1f}%")
-    if profile["historical_growth"] is not None:
-        print(f"  Historical (5yr FCF median):       {profile['historical_growth']*100:.1f}%")
-    if profile["consensus_growth"] is not None:
-        print(f"  Consensus (analyst near-term):     {profile['consensus_growth']*100:.1f}%")
+    if profile['fundamental_growth'] is not None:
+        print(f"  Fundamental:         {profile['fundamental_growth']*100:.1f}%")
+    if profile['consensus_growth'] is not None:
+        print(f"  Consensus:           {profile['consensus_growth']*100:.1f}%")
+    if profile['historical_growth'] is not None:
+        r2 = profile['r_squared_historical']
+        print(f"  Historical:          {profile['historical_growth']*100:.1f}%  (R² = {r2:.2f})")
+    if profile['n_analysts']:
+        print(f"  # analysts:          {profile['n_analysts']}")
 
-    print(f"\nYear-by-year growth profile:")
-    for i, g in enumerate(profile["yearly_growth"], start=1):
-        print(f"  Year {i:2d}:  {g*100:.1f}%")
-    print(f"  Terminal: {profile['terminal_growth']*100:.1f}%")
+    print(f"\nStructure:")
+    print(f"  High-growth years:   {profile['high_growth_years']}")
+    print(f"  Transition years:    {profile['transition_years']}")
+    print(f"  Total modeled years: {len(profile['yearly_growth'])}")
 
-    if profile["data_flags"]:
+    print(f"\nYear-by-year:")
+    print(f"  {'Year':>5}  {'Growth':>7}  {'ROIC':>7}  {'Reinv':>7}")
+    for i, (g, r, rv) in enumerate(zip(
+        profile['yearly_growth'],
+        profile['yearly_roic'],
+        profile['yearly_reinvestment']
+    ), start=1):
+        stage = "HG" if i <= profile['high_growth_years'] else "TR"
+        print(f"  {i:>3} {stage}  {g*100:>6.1f}%  {r*100:>6.1f}%  {rv*100:>6.1f}%")
+
+    print(f"\n  Terminal:")
+    print(f"     g  =  {profile['terminal_growth']*100:.2f}% (risk-free rate)")
+    print(f"   ROIC =  {profile['terminal_roic']*100:.1f}% (industry avg)")
+    print(f"  Reinv =  {profile['terminal_reinvestment_rate']*100:.1f}% (= g/ROIC)")
+
+    if profile['data_flags']:
         print(f"\nFlags:")
-        for f in profile["data_flags"]:
+        for f in profile['data_flags']:
             print(f"  - {f}")
