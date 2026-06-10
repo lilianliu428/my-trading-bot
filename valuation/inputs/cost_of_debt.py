@@ -105,11 +105,23 @@ def compute_cost_of_debt(ticker, risk_free_rate):
             "data_flag": "no_ebit_fallback",
         }
 
-    # Interest Expense (always positive number in yfinance)
     if "Interest Expense" in latest.index:
         interest_expense = float(latest["Interest Expense"])
     else:
-        raise ValueError(f"No Interest Expense found for {ticker}")
+        # Company has no debt or interest expense — treat as best credit (AAA)
+        print(f"  WARNING: No Interest Expense for {ticker} (likely debt-free); using AAA assumption")
+        return {
+            "ticker": ticker,
+            "ebit": ebit,
+            "interest_expense": 0,
+            "interest_coverage": float('inf'),
+            "synthetic_rating": "AAA",
+            "credit_spread": 0.0059,
+            "pre_tax_cost_of_debt": risk_free_rate + 0.0059,
+            "tax_rate": 0.21,
+            "after_tax_cost_of_debt": (risk_free_rate + 0.0059) * (1 - 0.21),
+            "data_flag": "no_interest_expense_debt_free",
+        }
 
     # Sanity check
     if interest_expense <= 0:
