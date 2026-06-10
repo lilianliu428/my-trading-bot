@@ -313,6 +313,138 @@ def _null_margin_history(data_flags):
         "data_flags": data_flags,
     }
 
+def detect_roic_regime_shift(roic_series):
+    """
+    Detect a major discontinuity in ROIC history.
+
+    A regime shift is a year-over-year change >100%, signaling
+    that the company has fundamentally transformed (e.g. NVDA pre/post AI).
+
+    Returns:
+        int or None: index of first post-shift year (0-indexed),
+        or None if no shift detected.
+
+    Example:
+        NVDA series [11.4%, 57.6%, 82.5%, 71.0%]:
+        Y0→Y1 change = (57.6 - 11.4) / 11.4 = 4.05 (405% increase) → regime shift
+        Returns 1 (use Y1 onward for mean)
+    """
+    if len(roic_series) < 3:
+        return None  # need at least 3 points
+
+    for i in range(1, len(roic_series)):
+        prev = roic_series[i - 1]
+        curr = roic_series[i]
+        if prev > 0:
+            change_ratio = abs(curr - prev) / prev
+            if change_ratio > 1.0:  # >100% YoY change
+                # Check that the new level is sustained (not just one-year spike)
+                # by ensuring at least one more data point after the shift
+                if i < len(roic_series) - 1:
+                    return i
+
+    return None
+
+
+def compute_adjusted_roic(roic_history_result):
+    """
+    Apply regime-shift detection and asymmetric mean-reversion blending.
+
+    Strategy:
+        1. Detect regime shift; if found, use only post-shift series
+        2. Recompute mean and stability on adjusted series
+        3. Apply asymmetric blend:
+           - Low CV (<0.15): use current as-is
+           - Moderate CV (0.15-0.30): 70/30 toward mean
+           - High CV (>0.30) with current > mean: 60/40 (boom case, trust current more)
+           - High CV (>0.30) with current <= mean: 40/60 (trough case, trust mean more)
+
+    Returns:
+        dict with adjusted_roic, original_current, original_mean,
+        used_series, regime_shift_detected, stability_used, method, data_flags
+    """
+    current = roic_history_result["current_roic"]
+    full_series = roic_history_result["roic_series"]
+    data_flags = []
+
+    if current is None or not full_series:
+        return {
+            "adjusted_roic": None,
+            "original_current": current,
+            "original_mean": roic_history_result.get("mean_roic"),
+            "used_series": [],
+            "regime_shift_detected": False,
+            "stability_used": None,
+            "method": "no_data",
+            "data_flags": data_flags,
+        }
+
+    # Step 1: detect regime shift
+    shift_index = detect_roic_regime_shift(full_series)
+
+    if shift_index is not None:
+        used_series = full_series[shift_index:]
+        regime_shift = True
+        data_flags.append(
+            f"ROIC regime shift detected at Y-{len(full_series) - shift_index} — "
+            f"using only post-shift data ({len(used_series)} years)"
+        )
+    else:
+        used_series = full_series
+        regime_shift = False
+
+    # Step 2: recompute mean and stability on the used series
+    if len(used_series) < 2:
+        # Only one post-shift data point — just use current
+        return {
+            "adjusted_roic": current,
+            "original_current": current,
+            "original_mean": roic_history_result.get("mean_roic"),
+            "used_series": used_series,
+            "regime_shift_detected": regime_shift,
+            "stability_used": None,
+            "method": "current_only_insufficient_history",
+            "data_flags": data_flags,
+        }
+
+    mean_used = sum(used_series) / len(used_series)
+    if mean_used > 0:
+        variance = sum((r - mean_used) ** 2 for r in used_series) / len(used_series)
+        std_dev = variance ** 0.5
+        stability_used = std_dev / mean_used
+    else:
+        stability_used = None
+
+    # Step 3: asymmetric blend
+    if stability_used is None or stability_used < 0.15:
+        adjusted = current
+        method = "current_low_volatility"
+    elif stability_used < 0.30:
+        adjusted = 0.70 * current + 0.30 * mean_used
+        method = "gentle_blend_moderate_volatility"
+        data_flags.append(f"Moderate ROIC volatility (CV={stability_used:.2f}) — gentle blend toward mean")
+    else:
+        # High volatility — direction of blend depends on whether current is above or below mean
+        if current > mean_used * 1.3:
+            adjusted = 0.60 * current + 0.40 * mean_used
+            method = "boom_blend"
+            data_flags.append(f"Boom-like pattern (current={current*100:.1f}% vs mean={mean_used*100:.1f}%) — conservative blend")
+        else:
+            adjusted = 0.40 * current + 0.60 * mean_used
+            method = "trough_blend"
+            data_flags.append(f"Trough-like pattern (current={current*100:.1f}% vs mean={mean_used*100:.1f}%) — trust mean more")
+
+    return {
+        "adjusted_roic": adjusted,
+        "original_current": current,
+        "original_mean": mean_used,
+        "used_series": used_series,
+        "regime_shift_detected": regime_shift,
+        "stability_used": stability_used,
+        "method": method,
+        "data_flags": data_flags,
+    }
+
 def compute_fundamental_growth(ticker):
     """
     Compute sustainable growth rate using fundamentals.
@@ -619,6 +751,21 @@ def build_growth_profile(ticker, wacc, bucket="default"):
     cons_g = cons_info["consensus_growth"]
     current_roic = fund_info["roic"]
 
+    # === ROIC adjustment via history-aware regime detection + blending ===
+    roic_history = compute_roic_history(ticker)
+    margin_history = compute_margin_history(ticker)
+    data_flags.extend(roic_history["data_flags"])
+    data_flags.extend(margin_history["data_flags"])
+
+    roic_adjustment = compute_adjusted_roic(roic_history)
+    data_flags.extend(roic_adjustment["data_flags"])
+
+    # Use adjusted ROIC if available, else fall back to current
+    if roic_adjustment["adjusted_roic"] is not None:
+        effective_roic = roic_adjustment["adjusted_roic"]
+    else:
+        effective_roic = current_roic
+
     # Initial growth = blend of fundamental, consensus, historical (70/20/10)
     initial_g_raw = _blend_growth(fund_g, cons_g, hist_g, data_flags)
 
@@ -652,7 +799,28 @@ def build_growth_profile(ticker, wacc, bucket="default"):
         )
         boom_multiplier = _detect_boom(fund_g, hist_g, data_flags)
 
-        raw_years = excess_return * EXCESS_RETURN_TO_YEARS_COEFF * bucket_multiplier * boom_multiplier
+        # Maturity check: stable companies (low ROIC CV) get shorter high-growth periods
+        maturity_multiplier = 1.0
+        stability = roic_history.get("stability")
+        if stability is not None and stability < 0.15:
+            maturity_multiplier = 0.7
+            data_flags.append(f"Mature company detected (ROIC CV={stability:.2f}) — high-growth period × 0.7")
+
+        # Margin decline check: compressing margins shorten high-growth
+        margin_decline_multiplier = 1.0
+        margin_trend = margin_history.get("trend")
+        if margin_trend is not None and margin_trend < -0.005:
+            margin_decline_multiplier = 0.7
+            data_flags.append(f"Margins declining ({margin_trend * 100:.2f}pp/yr) — high-growth period × 0.7")
+
+        raw_years = (
+                excess_return
+                * EXCESS_RETURN_TO_YEARS_COEFF
+                * bucket_multiplier
+                * boom_multiplier
+                * maturity_multiplier
+                * margin_decline_multiplier
+        )
         high_growth_years = int(max(
             MIN_HIGH_GROWTH_YEARS,
             min(MAX_HIGH_GROWTH_YEARS, raw_years)
@@ -668,8 +836,8 @@ def build_growth_profile(ticker, wacc, bucket="default"):
     yearly_roic = []
     yearly_reinvestment = []
 
-    # Stage 1: High growth, constant rates
-    stage1_roic = current_roic if current_roic is not None else industry_roic
+    # Stage 1: High growth, constant rates — use adjusted ROIC
+    stage1_roic = effective_roic if effective_roic is not None else industry_roic
     stage1_reinv = (initial_g / stage1_roic) if stage1_roic > 0 else 0
 
     for year in range(1, high_growth_years + 1):
@@ -704,6 +872,10 @@ def build_growth_profile(ticker, wacc, bucket="default"):
         "excess_return": excess_return,
         "r_squared_historical": hist_info.get("r_squared"),
         "n_analysts": cons_info.get("n_analysts"),
+        "roic_history": roic_history,
+        "margin_history": margin_history,
+        "roic_adjustment": roic_adjustment,
+        "effective_roic": effective_roic,
         "data_flags": data_flags,
     }
 
@@ -878,7 +1050,16 @@ if __name__ == "__main__":
         print(f"  Historical:          {profile['historical_growth']*100:.1f}%  (R² = {r2:.2f})")
     if profile['n_analysts']:
         print(f"  # analysts:          {profile['n_analysts']}")
-
+    print(f"\nROIC adjustment:")
+    if profile['roic_history']['current_roic']:
+        print(f"  Original current:    {profile['roic_history']['current_roic'] * 100:.1f}%")
+    if profile['effective_roic']:
+        print(f"  Adjusted (used):     {profile['effective_roic'] * 100:.1f}%")
+    print(f"  Method:              {profile['roic_adjustment']['method']}")
+    print(f"  Regime shift:        {profile['roic_adjustment']['regime_shift_detected']}")
+    if profile['margin_history']['trend'] is not None:
+        print(f"  Margin trend:        {profile['margin_history']['trend'] * 100:+.2f}pp/year")
+        
     print(f"\nStructure:")
     print(f"  High-growth years:   {profile['high_growth_years']}")
     print(f"  Transition years:    {profile['transition_years']}")
