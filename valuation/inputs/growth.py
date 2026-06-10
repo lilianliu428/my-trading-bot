@@ -118,6 +118,201 @@ BLEND_WEIGHTS = {"fundamental": 0.70, "consensus": 0.20, "historical": 0.10}
 
 # === Public functions (called from build_growth_profile and outside this module) ===
 
+def compute_roic_history(ticker, years=5):
+    """
+    Compute ROIC for each of the last N years.
+    Used for mean-reversion adjustments and maturity detection.
+
+    Returns:
+        dict with:
+            roic_series (list): ROIC values, oldest to newest
+            years_available (int): how many we got
+            mean_roic (float): average across the series
+            current_roic (float): most recent (last in series)
+            stability (float): coefficient of variation (std/mean) — low = stable
+            data_flags (list)
+    """
+    yf_ticker = yf.Ticker(ticker)
+    income_stmt = yf_ticker.income_stmt
+    balance_sheet = yf_ticker.balance_sheet
+
+    data_flags = []
+
+    if income_stmt is None or income_stmt.empty or balance_sheet is None or balance_sheet.empty:
+        data_flags.append("Missing financial statements for ROIC history")
+        return _null_roic_history(data_flags)
+
+    # yfinance returns most recent year first. We iterate columns.
+    n_cols = min(income_stmt.shape[1], balance_sheet.shape[1])
+    if n_cols < 2:
+        data_flags.append("Not enough years of financial data")
+        return _null_roic_history(data_flags)
+
+    info = yf_ticker.info
+    tax_rate = info.get("effectiveTaxRate") or DEFAULT_TAX_RATE
+
+    roic_series = []
+
+    for i in range(min(n_cols, years)):
+        income_col = income_stmt.iloc[:, i]
+        balance_col = balance_sheet.iloc[:, i]
+
+        # EBIT for this year
+        ebit = None
+        for field in ["EBIT", "Operating Income"]:
+            if field in income_col.index:
+                val = income_col[field]
+                if val is not None and not math.isnan(float(val)):
+                    ebit = float(val)
+                    break
+        if ebit is None or ebit <= 0:
+            continue  # skip years with missing or negative EBIT
+
+        # Invested capital for this year
+        total_equity = None
+        for field in ["Stockholders Equity", "Total Equity Gross Minority Interest", "Common Stock Equity"]:
+            if field in balance_col.index:
+                val = balance_col[field]
+                if val is not None and not math.isnan(float(val)):
+                    total_equity = float(val)
+                    break
+        if total_equity is None or total_equity <= 0:
+            continue
+
+        total_debt_val = balance_col.get("Total Debt", 0)
+        cash_val = balance_col.get("Cash And Cash Equivalents", 0)
+        total_debt = float(total_debt_val) if total_debt_val is not None and not math.isnan(float(total_debt_val)) else 0
+        cash = float(cash_val) if cash_val is not None and not math.isnan(float(cash_val)) else 0
+
+        invested_capital = total_equity + total_debt - cash
+        if invested_capital <= 0:
+            continue
+
+        roic_for_year = (ebit * (1 - tax_rate)) / invested_capital
+        roic_series.append(roic_for_year)
+
+    if not roic_series:
+        data_flags.append("No usable ROIC history computed")
+        return _null_roic_history(data_flags)
+
+    # yfinance gives newest first; reverse to chronological (oldest first)
+    roic_series = roic_series[::-1]
+
+    mean_roic = sum(roic_series) / len(roic_series)
+    current_roic = roic_series[-1]
+
+    # Coefficient of variation: how stable is ROIC?
+    # Low CV (< 0.15) = stable mature company
+    # High CV (> 0.4) = volatile, possibly in transition
+    if len(roic_series) > 1 and mean_roic > 0:
+        variance = sum((r - mean_roic) ** 2 for r in roic_series) / len(roic_series)
+        std_dev = variance ** 0.5
+        stability = std_dev / mean_roic
+    else:
+        stability = None
+
+    return {
+        "roic_series": roic_series,
+        "years_available": len(roic_series),
+        "mean_roic": mean_roic,
+        "current_roic": current_roic,
+        "stability": stability,
+        "data_flags": data_flags,
+    }
+
+
+def _null_roic_history(data_flags):
+    """Return-shaped null for failed ROIC history computation."""
+    return {
+        "roic_series": [],
+        "years_available": 0,
+        "mean_roic": None,
+        "current_roic": None,
+        "stability": None,
+        "data_flags": data_flags,
+    }
+
+def compute_margin_history(ticker, years=5):
+    """
+    Compute gross margin for each of the last N years.
+    Used for trajectory detection (declining margins = growth headwind).
+
+    Returns:
+        dict with:
+            margin_series (list): gross margins, oldest to newest
+            current_margin (float): most recent
+            trend (float): linear slope of margin over time (per year change)
+            data_flags (list)
+    """
+    yf_ticker = yf.Ticker(ticker)
+    income_stmt = yf_ticker.income_stmt
+
+    data_flags = []
+
+    if income_stmt is None or income_stmt.empty:
+        data_flags.append("Missing income statement for margin history")
+        return _null_margin_history(data_flags)
+
+    margin_series = []
+    n_cols = min(income_stmt.shape[1], years)
+
+    for i in range(n_cols):
+        col = income_stmt.iloc[:, i]
+
+        revenue = None
+        for field in ["Total Revenue", "Revenue", "Operating Revenue"]:
+            if field in col.index:
+                val = col[field]
+                if val is not None and not math.isnan(float(val)):
+                    revenue = float(val)
+                    break
+        if revenue is None or revenue <= 0:
+            continue
+
+        cogs = None
+        for field in ["Cost Of Revenue", "Cost of Revenue", "Reconciled Cost Of Revenue"]:
+            if field in col.index:
+                val = col[field]
+                if val is not None and not math.isnan(float(val)):
+                    cogs = float(val)
+                    break
+        if cogs is None:
+            continue
+
+        gross_margin = (revenue - cogs) / revenue
+        margin_series.append(gross_margin)
+
+    if len(margin_series) < 2:
+        data_flags.append("Not enough margin data for trend")
+        return _null_margin_history(data_flags)
+
+    # Reverse to chronological order (oldest first)
+    margin_series = margin_series[::-1]
+    current_margin = margin_series[-1]
+
+    # Linear trend: slope of margin over time
+    # Positive = expanding, negative = compressing
+    n = len(margin_series)
+    t = np.arange(n)
+    slope, _intercept = np.polyfit(t, margin_series, deg=1)
+    trend = float(slope)  # change in margin per year
+
+    return {
+        "margin_series": margin_series,
+        "current_margin": current_margin,
+        "trend": trend,
+        "data_flags": data_flags,
+    }
+
+
+def _null_margin_history(data_flags):
+    return {
+        "margin_series": [],
+        "current_margin": None,
+        "trend": None,
+        "data_flags": data_flags,
+    }
+
 def compute_fundamental_growth(ticker):
     """
     Compute sustainable growth rate using fundamentals.
