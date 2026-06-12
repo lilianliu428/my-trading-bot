@@ -49,12 +49,13 @@ EXCESS_RETURN_TO_YEARS_COEFF = 50
 INDUSTRY_AVERAGE_ROIC = {
     "mature_tech": 0.17,
     "saas_growth": 0.15,
-    "semiconductor": 0.12,
+    "semiconductors": 0.12,
     "consumer_defensive": 0.13,
     "consumer_cyclical": 0.10,
-    "financial_bank": 0.08,
+    "bank": 0.08,
     "financial_other": 0.10,
-    "healthcare_pharma": 0.15,
+    "pharma": 0.15,
+    "biotech": 0.12,
     "healthcare_other": 0.12,
     "industrial": 0.10,
     "energy": 0.08,
@@ -71,8 +72,9 @@ INDUSTRY_AVERAGE_ROIC = {
 # TODO Phase 1.4: replace with empirical 75th percentile from historical data
 BUCKET_INITIAL_GROWTH_CAP = {
     "saas_growth": 0.35,
-    "semiconductor": 0.30,
-    "healthcare_pharma": 0.25,
+    "semiconductors": 0.30,
+    "biotech": 0.30,
+    "pharma": 0.25,
     "mature_tech": 0.20,
     "consumer_cyclical": 0.20,
     "communication": 0.18,
@@ -82,7 +84,7 @@ BUCKET_INITIAL_GROWTH_CAP = {
     "materials": 0.12,
     "energy": 0.12,
     "consumer_defensive": 0.10,
-    "financial_bank": 0.10,
+    "bank": 0.10,
     "insurance": 0.10,
     "reit": 0.08,
     "utility": 0.06,
@@ -94,18 +96,19 @@ BUCKET_INITIAL_GROWTH_CAP = {
 # Moated industries get longer periods (defenses persist)
 BUCKET_HIGH_GROWTH_MULTIPLIER = {
     "saas_growth": 1.2,
+    "biotech": 1.1,
     "mature_tech": 1.0,
     "consumer_defensive": 1.0,
-    "healthcare_pharma": 0.8,
+    "pharma": 0.8,
     "communication": 0.9,
     "consumer_cyclical": 0.8,
     "industrial": 0.7,
     "healthcare_other": 0.8,
     "financial_other": 0.8,
-    "financial_bank": 0.7,
+    "bank": 0.7,
     "insurance": 0.8,
     "reit": 0.7,
-    "semiconductor": 0.5,
+    "semiconductors": 0.8,
     "energy": 0.5,
     "materials": 0.5,
     "utility": 0.6,
@@ -784,7 +787,12 @@ def build_growth_profile(ticker, wacc, bucket="default"):
 
     # Terminal values
     terminal_g = rf  # Damodaran: terminal g ≤ risk-free rate
-    terminal_roic = industry_roic
+    # Terminal ROIC: max of industry average and 40% of current ROIC.
+    # Floors high-quality compounders so their moats don't fully disappear in 10 years.
+    if current_roic is not None and current_roic > 0:
+        terminal_roic = max(industry_roic, 0.4 * current_roic)
+    else:
+        terminal_roic = industry_roic
     terminal_reinvestment_rate = terminal_g / terminal_roic
 
     # High-growth period length from excess returns × bucket multiplier × boom adjustment
@@ -1059,7 +1067,6 @@ if __name__ == "__main__":
     print(f"  Regime shift:        {profile['roic_adjustment']['regime_shift_detected']}")
     if profile['margin_history']['trend'] is not None:
         print(f"  Margin trend:        {profile['margin_history']['trend'] * 100:+.2f}pp/year")
-        
     print(f"\nStructure:")
     print(f"  High-growth years:   {profile['high_growth_years']}")
     print(f"  Transition years:    {profile['transition_years']}")
