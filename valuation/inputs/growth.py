@@ -141,6 +141,15 @@ def compute_roic_history(ticker, years=5):
 
     data_flags = []
 
+    # Currency check: skip non-USD reporters (financials don't match USD prices)
+    try:
+        currency = yf_ticker.info.get("financialCurrency", "USD")
+    except Exception:
+        currency = "USD"
+    if currency != "USD":
+        data_flags.append(f"Non-USD reporting currency ({currency}) — skipping ROIC history")
+        return _null_roic_history(data_flags)
+
     if income_stmt is None or income_stmt.empty or balance_sheet is None or balance_sheet.empty:
         data_flags.append("Missing financial statements for ROIC history")
         return _null_roic_history(data_flags)
@@ -466,6 +475,15 @@ def compute_fundamental_growth(ticker):
     """
     print(f"  Computing fundamental growth for {ticker}...")
     yf_ticker = yf.Ticker(ticker)
+
+    # Currency check: skip non-USD reporters
+    try:
+        currency = yf_ticker.info.get("financialCurrency", "USD")
+    except Exception:
+        currency = "USD"
+    if currency != "USD":
+        raise ValueError(f"Non-USD reporting currency ({currency}) for {ticker} — cannot value with current model")
+
     income_stmt = yf_ticker.income_stmt
     balance_sheet = yf_ticker.balance_sheet
     cash_flow = yf_ticker.cashflow
@@ -555,6 +573,17 @@ def compute_fundamental_growth(ticker):
     cash = float(latest_balance.get("Cash And Cash Equivalents", 0))
     invested_capital = total_equity + total_debt - cash
 
+    # Also compute invested capital ex-goodwill for the fundamental growth signal only.
+    # This avoids AMD-style cases where heavy acquisition goodwill suppresses ROIC and
+    # causes the model to forecast unrealistically low organic growth.
+    goodwill_raw = latest_balance.get("Goodwill", 0)
+    if goodwill_raw is None or (isinstance(goodwill_raw, float) and math.isnan(goodwill_raw)):
+        goodwill_raw = latest_balance.get("Goodwill And Other Intangible Assets", 0)
+    goodwill = float(goodwill_raw) if goodwill_raw is not None else 0
+    if math.isnan(goodwill):
+        goodwill = 0
+    invested_capital_ex_goodwill = invested_capital - goodwill
+
     if invested_capital <= 0:
         data_flags.append("Invested capital is negative or zero — ROIC undefined")
         return {
@@ -569,7 +598,21 @@ def compute_fundamental_growth(ticker):
         }
 
     roic = ebit_after_tax / invested_capital
-    fundamental_growth = reinvestment_rate * roic
+
+    # Use ex-goodwill ROIC for fundamental_growth signal (operating economics of next dollar)
+    # but keep "roic" itself unchanged (with goodwill) — that goes into Stage 1, terminal,
+    # and excess_return where it represents the average dollar of deployed capital.
+    if invested_capital_ex_goodwill > 0:
+        roic_for_growth = ebit_after_tax / invested_capital_ex_goodwill
+    else:
+        roic_for_growth = roic
+    fundamental_growth = reinvestment_rate * roic_for_growth
+
+    if goodwill > 0 and abs(roic_for_growth - roic) / max(roic, 0.01) > 0.2:
+        data_flags.append(
+            f"ROIC ex-goodwill ({roic_for_growth*100:.1f}%) differs from "
+            f"reported ROIC ({roic*100:.1f}%) by >20% — heavy acquisition history"
+        )
 
     return {
         "ebit_after_tax": ebit_after_tax,
@@ -793,7 +836,11 @@ def build_growth_profile(ticker, wacc, bucket="default"):
         terminal_roic = max(industry_roic, 0.4 * current_roic)
     else:
         terminal_roic = industry_roic
-    terminal_reinvestment_rate = terminal_g / terminal_roic
+    # Cap terminal reinvestment at 80% of NOPAT
+    if terminal_roic > 0:
+        terminal_reinvestment_rate = min(terminal_g / terminal_roic, 0.80)
+    else:
+        terminal_reinvestment_rate = 0
 
     # High-growth period length from excess returns × bucket multiplier × boom adjustment
     if current_roic is None:
@@ -845,20 +892,44 @@ def build_growth_profile(ticker, wacc, bucket="default"):
     yearly_reinvestment = []
 
     # Stage 1: High growth, constant rates — use adjusted ROIC
+    # Cap reinvestment at 80% of NOPAT; if growth requires more, scale growth down
+    MAX_REINV = 0.80
     stage1_roic = effective_roic if effective_roic is not None else industry_roic
-    stage1_reinv = (initial_g / stage1_roic) if stage1_roic > 0 else 0
+    stage1_g = initial_g
+    if stage1_roic > 0:
+        desired_reinv = stage1_g / stage1_roic
+        if desired_reinv > MAX_REINV:
+            stage1_g = MAX_REINV * stage1_roic
+            stage1_reinv = MAX_REINV
+            data_flags.append(
+                f"Reinvestment capped at {MAX_REINV*100:.0f}% — growth reduced from "
+                f"{initial_g*100:.1f}% to {stage1_g*100:.1f}% (ROIC={stage1_roic*100:.1f}% is binding)"
+            )
+        else:
+            stage1_reinv = desired_reinv
+    else:
+        stage1_reinv = 0
 
     for year in range(1, high_growth_years + 1):
-        yearly_growth.append(initial_g)
+        yearly_growth.append(stage1_g)
         yearly_roic.append(stage1_roic)
         yearly_reinvestment.append(stage1_reinv)
 
     # Stage 2: Transition — linear fade across all three variables
     for i in range(1, TRANSITION_YEARS + 1):
         progress = i / TRANSITION_YEARS  # 0 → 1 across transition
-        g = initial_g + progress * (terminal_g - initial_g)
+        g = stage1_g + progress * (terminal_g - stage1_g)
         roic = stage1_roic + progress * (terminal_roic - stage1_roic)
-        reinvestment = g / roic if roic > 0 else 0
+        if roic > 0:
+            desired_reinv = g / roic
+            if desired_reinv > MAX_REINV:
+                # cap reinvestment, scale growth down to match
+                g = MAX_REINV * roic
+                reinvestment = MAX_REINV
+            else:
+                reinvestment = desired_reinv
+        else:
+            reinvestment = 0
         yearly_growth.append(g)
         yearly_roic.append(roic)
         yearly_reinvestment.append(reinvestment)
