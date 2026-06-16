@@ -23,3 +23,4 @@ data.db
 # Local working backups
 *.bak
 data.db.before_*
+.env
