@@ -967,6 +967,24 @@ def build_growth_profile(ticker, wacc, bucket="default"):
 
     # Terminal values
     terminal_g = rf  # Damodaran: terminal g ≤ risk-free rate
+
+    # Semi-specific: override terminal_g with cycle-specific assumption from
+    # cycle classifier. Memory cycles terminal at 2.0%, AI-infrastructure at
+    # 3.5%, diversified analog at 2.8%. These reflect long-run end-market
+    # demand growth, not just risk-free rate.
+    if bucket == "semiconductors":
+        try:
+            from valuation.tech.semiconductors.cycle_classifier import classify_semi_cycle
+            semi_profile = classify_semi_cycle(ticker)
+            cycle_terminal_g = semi_profile["terminal_growth"]
+            if cycle_terminal_g != terminal_g:
+                data_flags.append(
+                    f"Semi terminal growth: {terminal_g * 100:.2f}% → "
+                    f"{cycle_terminal_g * 100:.2f}% (cycle: {semi_profile['cycle']})"
+                )
+                terminal_g = cycle_terminal_g
+        except Exception as e:
+            data_flags.append(f"Semi cycle terminal_g lookup failed: {e}; using risk-free rate.")
     # Terminal ROIC: max of industry average and 40% of current ROIC.
     # Floors high-quality compounders so their moats don't fully disappear in 10 years.
     if current_roic is not None and current_roic > 0:
