@@ -592,6 +592,9 @@ def compute_fundamental_growth(ticker):
             "reinvestment_rate": reinvestment_rate,
             "invested_capital": invested_capital,
             "roic": None,
+            "roic_ex_goodwill": None,
+            "goodwill": goodwill,
+            "goodwill_ratio": None,
             "fundamental_growth": None,
             "tax_rate": tax_rate,
             "data_flags": data_flags,
@@ -614,12 +617,17 @@ def compute_fundamental_growth(ticker):
             f"reported ROIC ({roic*100:.1f}%) by >20% — heavy acquisition history"
         )
 
+    goodwill_ratio = goodwill / invested_capital if invested_capital > 0 else None
+
     return {
         "ebit_after_tax": ebit_after_tax,
         "reinvestment": reinvestment,
         "reinvestment_rate": reinvestment_rate,
         "invested_capital": invested_capital,
         "roic": roic,
+        "roic_ex_goodwill": roic_for_growth if invested_capital_ex_goodwill > 0 else None,
+        "goodwill": goodwill,
+        "goodwill_ratio": goodwill_ratio,
         "fundamental_growth": fundamental_growth,
         "tax_rate": tax_rate,
         "data_flags": data_flags,
@@ -694,6 +702,78 @@ def compute_historical_growth(ticker, years=5):
         "data_flags": data_flags,
     }
 
+def compute_historical_revenue_growth(ticker, years=5):
+    """
+    Compute historical revenue growth via log-linear regression.
+
+    Why revenue instead of FCF: for serial acquirers, FCF is noisy because
+    acquisition spending shows up irregularly in investing/financing sections.
+    Revenue is cleaner — it captures what the integrated business sells,
+    including acquired revenue once consolidated.
+
+    Used ONLY for heavy-acquirer override of the fundamental_growth signal.
+    Not part of the standard signal blend.
+
+    Returns:
+        dict with: growth_rate, r_squared, n_years, data_flags
+    """
+    print(f"  Computing historical revenue growth for {ticker}...")
+    yf_ticker = yf.Ticker(ticker)
+    income_stmt = yf_ticker.income_stmt
+
+    data_flags = []
+
+    if income_stmt is None or income_stmt.empty:
+        data_flags.append("No income statement data for historical revenue growth")
+        return {"growth_rate": None, "r_squared": None, "n_years": 0, "data_flags": data_flags}
+
+    # Extract Total Revenue row
+    revenue_row = None
+    for field in ["Total Revenue", "Revenue", "Operating Revenue"]:
+        if field in income_stmt.index:
+            revenue_row = income_stmt.loc[field]
+            break
+
+    if revenue_row is None:
+        data_flags.append("No revenue row found in income statement")
+        return {"growth_rate": None, "r_squared": None, "n_years": 0, "data_flags": data_flags}
+
+    # yfinance returns columns in reverse chronological order (latest first).
+    # Reverse so series goes oldest → newest, then drop NaNs.
+    series = revenue_row.iloc[::-1].dropna().astype(float).tolist()
+    series = [v for v in series if v > 0]  # log-linear needs positive values
+
+    if len(series) < 3:
+        data_flags.append(f"Only {len(series)} years of revenue data — need ≥3 for regression")
+        return {"growth_rate": None, "r_squared": None, "n_years": len(series), "data_flags": data_flags}
+
+    # Log-linear regression
+    log_values = [math.log(v) for v in series]
+    n = len(log_values)
+    x_mean = (n - 1) / 2  # 0, 1, 2, ..., n-1 → mean is (n-1)/2
+    y_mean = sum(log_values) / n
+    numerator = sum((i - x_mean) * (log_values[i] - y_mean) for i in range(n))
+    denominator = sum((i - x_mean) ** 2 for i in range(n))
+
+    if denominator == 0:
+        data_flags.append("Revenue regression denominator zero — flat series")
+        return {"growth_rate": None, "r_squared": None, "n_years": n, "data_flags": data_flags}
+
+    slope = numerator / denominator
+    growth_rate = math.exp(slope) - 1  # convert log-slope to growth rate
+
+    # R²
+    ss_total = sum((y - y_mean) ** 2 for y in log_values)
+    intercept = y_mean - slope * x_mean
+    ss_residual = sum((log_values[i] - (slope * i + intercept)) ** 2 for i in range(n))
+    r_squared = 1 - (ss_residual / ss_total) if ss_total > 0 else 0
+
+    return {
+        "growth_rate": growth_rate,
+        "r_squared": r_squared,
+        "n_years": n,
+        "data_flags": data_flags,
+    }
 
 def get_consensus_growth(ticker):
     """
@@ -797,6 +877,58 @@ def build_growth_profile(ticker, wacc, bucket="default"):
     cons_g = cons_info["consensus_growth"]
     current_roic = fund_info["roic"]
 
+    # === Heavy-acquirer routing ===
+    # When goodwill is a large fraction of invested capital (e.g. AVGO post-VMware,
+    # AMD post-Xilinx), reported ROIC drastically understates operational returns.
+    # The acquisition premiums sit on the balance sheet inflating invested capital
+    # without generating proportional cash flow. Route ex-goodwill ROIC through the
+    # entire pipeline (Stage 1, terminal floor, excess return for runway length)
+    # so the model values the operational business, not the M&A history.
+    #
+    # Threshold: 40% goodwill / invested capital. Below that, reported and
+    # ex-goodwill ROIC are close enough that no special handling is needed.
+    HEAVY_ACQUIRER_GOODWILL_THRESHOLD = 0.40
+    roic_ex_goodwill = fund_info.get("roic_ex_goodwill")
+    goodwill_ratio = fund_info.get("goodwill_ratio")
+    is_heavy_acquirer = (
+            goodwill_ratio is not None
+            and goodwill_ratio > HEAVY_ACQUIRER_GOODWILL_THRESHOLD
+            and roic_ex_goodwill is not None
+            and roic_ex_goodwill > 0
+    )
+    if is_heavy_acquirer:
+        data_flags.append(
+            f"Heavy acquirer: goodwill = {goodwill_ratio * 100:.0f}% of invested capital "
+            f"(> {HEAVY_ACQUIRER_GOODWILL_THRESHOLD * 100:.0f}% threshold). "
+            f"Using ex-goodwill ROIC ({roic_ex_goodwill * 100:.1f}%) instead of reported "
+            f"({current_roic * 100:.1f}%) for Stage 1, terminal floor, and runway length."
+        )
+        current_roic = roic_ex_goodwill  # rebind for downstream pipeline
+
+        # For heavy acquirers, the formula fundamental_growth = reinvestment_rate × ROIC
+        # structurally undercounts growth because acquisition spending flows through
+        # financing/investing sections, not capex. Replace fundamental_growth signal
+        # with historical revenue growth as a proxy for M&A-driven growth dynamics.
+        # This is a deliberate methodology choice for acquirers; see model docs.
+        hist_revenue = compute_historical_revenue_growth(ticker)
+        data_flags.extend(hist_revenue["data_flags"])
+        if hist_revenue["growth_rate"] is not None:
+            old_fund_g = fund_g
+            fund_g = hist_revenue["growth_rate"]
+            data_flags.append(
+                f"Heavy-acquirer fundamental override: "
+                f"reinv×ROIC formula gave {old_fund_g * 100:.1f}% "
+                f"(undercounts M&A-driven growth). "
+                f"Replaced with historical revenue growth "
+                f"({fund_g * 100:.1f}%, R²={hist_revenue['r_squared']:.2f})."
+            )
+        else:
+            data_flags.append(
+                "Heavy-acquirer fundamental override unavailable: "
+                "historical revenue growth could not be computed; "
+                f"falling back to formula value {fund_g * 100:.1f}%."
+            )
+
     # === ROIC adjustment via history-aware regime detection + blending ===
     roic_history = compute_roic_history(ticker)
     margin_history = compute_margin_history(ticker)
@@ -806,8 +938,13 @@ def build_growth_profile(ticker, wacc, bucket="default"):
     roic_adjustment = compute_adjusted_roic(roic_history)
     data_flags.extend(roic_adjustment["data_flags"])
 
-    # Use adjusted ROIC if available, else fall back to current
-    if roic_adjustment["adjusted_roic"] is not None:
+    # Use adjusted ROIC if available, else fall back to current.
+    # Skip regime detection for heavy acquirers: ROIC history reflects
+    # acquisition-driven dips that aren't true regime changes, and we want
+    # the ex-goodwill ROIC (already rebound to current_roic above) to flow through.
+    if is_heavy_acquirer:
+        effective_roic = current_roic
+    elif roic_adjustment["adjusted_roic"] is not None:
         effective_roic = roic_adjustment["adjusted_roic"]
     else:
         effective_roic = current_roic
@@ -885,7 +1022,26 @@ def build_growth_profile(ticker, wacc, bucket="default"):
             data_flags.append(
                 f"Bucket multiplier {bucket_multiplier} applied (industry: {bucket})"
             )
-
+         # Path A semi runway cap: cycle classifier defines the maximum plausible
+        # high-growth period for a company within its semi cycle. Individual
+        # companies can have shorter runways (boom-detector, low ROIC, etc.)
+        # but no semi can exceed its cycle's duration. The cycle is a ceiling,
+        # not a prescription — per-company dynamics still determine where each
+         # company sits within the cycle.
+        if bucket == "semiconductors":
+            try:
+                from valuation.tech.semiconductors.cycle_classifier import classify_semi_cycle
+                semi_profile = classify_semi_cycle(ticker)
+                cycle_max_runway = semi_profile["runway_years"]
+                if high_growth_years > cycle_max_runway:
+                    data_flags.append(
+                        f"Semi runway capped: {high_growth_years}yr → {cycle_max_runway}yr "
+                        f"(cycle: {semi_profile['cycle']}, source: {semi_profile['source']}). "
+                        f"Generic excess-return formula exceeded cycle-plausible duration."
+                    )
+                    high_growth_years = cycle_max_runway
+            except Exception as e:
+                data_flags.append(f"Semi cycle classifier failed: {e}; using generic runway.")
     # Build the year-by-year arrays
     yearly_growth = []
     yearly_roic = []

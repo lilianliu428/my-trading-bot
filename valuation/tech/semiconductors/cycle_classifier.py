@@ -58,7 +58,7 @@ SEMI_CYCLE_MAP = {
 # These numbers reflect cycle dynamics, not company-specific quality.
 CYCLE_PROFILES = {
     "memory": {
-        "runway_years":    6,
+        "runway_years":    5,
         "terminal_growth": 0.020,  # 2.0% - mature, commodity-like
         "rationale":       (
             "Memory cycle (DRAM/NAND). Historical 3-4 year price-driven cycles. "
@@ -67,7 +67,7 @@ CYCLE_PROFILES = {
         ),
     },
     "ai_infrastructure": {
-        "runway_years":    13,
+        "runway_years":    10,
         "terminal_growth": 0.035,  # 3.5% - elevated for infra buildout
         "rationale":       (
             "AI infrastructure cycle. Structural data center buildout, "
@@ -76,7 +76,7 @@ CYCLE_PROFILES = {
         ),
     },
     "diversified_analog": {
-        "runway_years":    9,
+        "runway_years":    8,
         "terminal_growth": 0.028,  # 2.8% - steady mature growth
         "rationale":       (
             "Diversified analog. Exposure across auto, industrial, and comms "
