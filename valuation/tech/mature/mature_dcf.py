@@ -13,9 +13,9 @@ compute_intrinsic_value_for_ticker() in valuation/dcf.py instead.
 import yfinance as yf
 
 from valuation.tech import TECH_BUCKETS
-from valuation.tech.rd_capitalization import capitalize_rd
-from valuation.tech.ex_goodwill import compute_ex_goodwill_roic
-from valuation.tech.sbc_dilution import project_share_count
+from valuation.tech.shared.rd_capitalization import capitalize_rd
+from valuation.tech.shared.ex_goodwill import compute_ex_goodwill_roic
+from valuation.tech.shared.sbc_dilution import project_share_count
 
 # Reinvestment cap — same as in generic growth.py
 MAX_REINV = 0.80
