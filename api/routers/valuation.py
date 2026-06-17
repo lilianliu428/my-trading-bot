@@ -85,4 +85,6 @@ def get_valuation(ticker: str):
         high_growth_years=result["growth_profile"]["high_growth_years"],
         initial_growth=result["growth_profile"]["yearly_growth"][0],
         terminal_growth=result["growth_profile"]["yearly_growth"][-1],
+	is_heavy_acquirer=result["goodwill_analysis"]["is_heavy_acquirer"],
+        data_flags=result.get("data_flags", []),
     )
