@@ -459,19 +459,16 @@ def compute_adjusted_roic(roic_history_result):
 
 def compute_fundamental_growth(ticker):
     """
-    Compute sustainable growth rate using fundamentals.
+    Compute fundamental growth using normalized reinvestment rate.
+
+    Why: single-year reinvestment is too noisy. A capex spike (GOOGL AI buildout)
+    or a return-of-capital year (AVGO) distorts the fundamental_growth signal
+    badly. We take the median reinvestment rate over the available 3-5 years
+    of yfinance data to smooth out one-time effects.
 
     Formula:
-        g = reinvestment_rate × ROIC
-
-    Where:
-        reinvestment_rate = (Capex - Depreciation + ΔWorking Capital) / EBIT(1-t)
-        ROIC = EBIT(1-t) / Invested Capital
-        Invested Capital = Total Equity + Total Debt - Cash
-
-    Returns:
-        dict with: ebit_after_tax, reinvestment, reinvestment_rate,
-                   invested_capital, roic, fundamental_growth, tax_rate, data_flags
+        median_reinvestment_rate = median over years of (reinvestment_y / NOPAT_y)
+        fundamental_growth = median_reinvestment_rate × ROIC_ex_goodwill (or ROIC)
     """
     print(f"  Computing fundamental growth for {ticker}...")
     yf_ticker = yf.Ticker(ticker)
@@ -488,79 +485,64 @@ def compute_fundamental_growth(ticker):
     balance_sheet = yf_ticker.balance_sheet
     cash_flow = yf_ticker.cashflow
 
-    if any(df is None or df.empty for df in [income_stmt, balance_sheet, cash_flow]):
-        raise ValueError(f"Missing financial statement data for {ticker}")
-
-    latest_income = income_stmt.iloc[:, 0]
-    latest_balance = balance_sheet.iloc[:, 0]
-    latest_cashflow = cash_flow.iloc[:, 0]
-    prev_balance = balance_sheet.iloc[:, 1] if income_stmt.shape[1] >= 2 else None
-
     data_flags = []
 
-    # EBIT — banks and insurance companies don't have it in the standard form
-    ebit = None
-    for field in ["EBIT", "Operating Income"]:
-        if field in latest_income.index:
-            ebit = float(latest_income[field])
-            break
-    if ebit is None:
-        data_flags.append("No EBIT found (likely financial company) — fundamental growth unavailable")
-        return _null_fundamental_result(data_flags)
+    if income_stmt is None or income_stmt.empty:
+        raise ValueError(f"No income statement data for {ticker}")
+    if balance_sheet is None or balance_sheet.empty:
+        raise ValueError(f"No balance sheet data for {ticker}")
+    if cash_flow is None or cash_flow.empty:
+        raise ValueError(f"No cash flow data for {ticker}")
 
-    if ebit <= 0:
-        data_flags.append("EBIT is negative or zero — fundamental growth undefined")
-        return _null_fundamental_result(data_flags)
+    # yfinance returns columns in reverse chronological order (latest first).
+    # We want to iterate from oldest to newest for clarity. But for the
+    # reinvestment rate history, year order doesn't matter — we just take
+    # the median.
 
-    # Tax rate
+    # Determine how many years we can compute reinvestment rate for.
+    # We need:
+    #   - Income statement: EBIT (or Operating Income) for the year
+    #   - Cash flow: capex, depreciation for the year
+    #   - Balance sheet: working capital for the year AND the year before
+    # So if we have N years of balance sheet, we can compute N-1 reinvestment rates.
+    n_balance_years = len(balance_sheet.columns)
+    n_income_years = len(income_stmt.columns)
+    n_cash_years = len(cash_flow.columns)
+    max_years = min(n_balance_years - 1, n_income_years, n_cash_years)
+
+    if max_years < 3:
+        data_flags.append(
+            f"Only {max_years} years of complete data — reinvestment rate uses fewer years than ideal"
+        )
+
+    if max_years < 1:
+        raise ValueError(f"Insufficient historical data for {ticker} (only {max_years} year(s))")
+
+    # Cap at 5 years (more than that is rarely available from yfinance anyway)
+    n_years_to_use = min(max_years, 5)
+
+    # We'll need the LATEST year's data for ROIC and tax rate (those don't normalize)
+    latest_income = income_stmt.iloc[:, 0]
+    latest_balance = balance_sheet.iloc[:, 0]
+    latest_cash = cash_flow.iloc[:, 0]
+
+    # ── Latest-year EBIT, tax rate, NOPAT (for the ROIC calculation) ──
+    if "EBIT" in latest_income.index:
+        ebit = float(latest_income["EBIT"])
+    elif "Operating Income" in latest_income.index:
+        ebit = float(latest_income["Operating Income"])
+    else:
+        raise ValueError(f"No EBIT or Operating Income found for {ticker}")
+
     info = yf_ticker.info
-    tax_rate = info.get("effectiveTaxRate") or DEFAULT_TAX_RATE
+    tax_rate = info.get("effectiveTaxRate") or 0.21
+    if tax_rate <= 0 or tax_rate > 0.5:
+        tax_rate = 0.21
+        data_flags.append("Implausible effective tax rate — using 21% US corporate rate")
+
     ebit_after_tax = ebit * (1 - tax_rate)
 
-    # Capex and depreciation
-    capex = None
-    for field in ["Capital Expenditure", "Capital Expenditures"]:
-        if field in latest_cashflow.index:
-            capex = abs(float(latest_cashflow[field]))
-            break
-    if capex is None:
-        raise ValueError(f"No capex field found for {ticker}")
-
-    depreciation = None
-    for field in ["Depreciation Amortization Depletion", "Depreciation And Amortization", "Depreciation"]:
-        if field in latest_cashflow.index:
-            depreciation = float(latest_cashflow[field])
-            break
-    if depreciation is None:
-        raise ValueError(f"No depreciation field found for {ticker}")
-
-    # Change in working capital
-    def working_capital(balance):
-        ca = balance.get("Current Assets")
-        cl = balance.get("Current Liabilities")
-        if ca is None or cl is None:
-            return None
-        return float(ca) - float(cl)
-
-    wc_current = working_capital(latest_balance)
-    wc_prev = working_capital(prev_balance) if prev_balance is not None else None
-
-    if wc_current is None or wc_prev is None:
-        change_in_wc = 0.0
-        data_flags.append("Working capital data missing — assumed ΔWC = 0")
-    else:
-        change_in_wc = wc_current - wc_prev
-
-    reinvestment = capex - depreciation + change_in_wc
-
-    # Reinvestment rate — clamp to 0 if negative
-    if reinvestment < 0:
-        reinvestment_rate = 0
-        data_flags.append("Negative reinvestment — clamped to 0")
-    else:
-        reinvestment_rate = reinvestment / ebit_after_tax
-
-    # Invested capital
+    # ── Invested capital (latest year, for ROIC) ──
     total_equity = None
     for field in ["Stockholders Equity", "Total Equity Gross Minority Interest", "Common Stock Equity"]:
         if field in latest_balance.index:
@@ -573,9 +555,6 @@ def compute_fundamental_growth(ticker):
     cash = float(latest_balance.get("Cash And Cash Equivalents", 0))
     invested_capital = total_equity + total_debt - cash
 
-    # Also compute invested capital ex-goodwill for the fundamental growth signal only.
-    # This avoids AMD-style cases where heavy acquisition goodwill suppresses ROIC and
-    # causes the model to forecast unrealistically low organic growth.
     goodwill_raw = latest_balance.get("Goodwill", 0)
     if goodwill_raw is None or (isinstance(goodwill_raw, float) and math.isnan(goodwill_raw)):
         goodwill_raw = latest_balance.get("Goodwill And Other Intangible Assets", 0)
@@ -588,8 +567,10 @@ def compute_fundamental_growth(ticker):
         data_flags.append("Invested capital is negative or zero — ROIC undefined")
         return {
             "ebit_after_tax": ebit_after_tax,
-            "reinvestment": reinvestment,
-            "reinvestment_rate": reinvestment_rate,
+            "reinvestment": None,
+            "reinvestment_rate": None,
+            "reinvestment_rate_history": [],
+            "reinvestment_rate_method": "none",
             "invested_capital": invested_capital,
             "roic": None,
             "roic_ex_goodwill": None,
@@ -602,14 +583,122 @@ def compute_fundamental_growth(ticker):
 
     roic = ebit_after_tax / invested_capital
 
-    # Use ex-goodwill ROIC for fundamental_growth signal (operating economics of next dollar)
-    # but keep "roic" itself unchanged (with goodwill) — that goes into Stage 1, terminal,
-    # and excess_return where it represents the average dollar of deployed capital.
+    # ── Per-year reinvestment rate history ──
+    # For each of the last N years (where we have both that year's cash flow
+    # and the prior year's balance sheet for ΔWC), compute reinvestment rate.
+    reinvestment_rates = []
+    for year_idx in range(n_years_to_use):
+        try:
+            income_y = income_stmt.iloc[:, year_idx]
+            cash_y = cash_flow.iloc[:, year_idx]
+            balance_y = balance_sheet.iloc[:, year_idx]
+            balance_y_prev = balance_sheet.iloc[:, year_idx + 1]
+
+            # Year EBIT after tax (use same tax rate; year-by-year tax rates
+            # are too noisy from yfinance to be reliable)
+            if "EBIT" in income_y.index:
+                ebit_y = float(income_y["EBIT"])
+            elif "Operating Income" in income_y.index:
+                ebit_y = float(income_y["Operating Income"])
+            else:
+                continue
+            if math.isnan(ebit_y) or ebit_y <= 0:
+                continue
+            nopat_y = ebit_y * (1 - tax_rate)
+
+            # Capex and depreciation
+            capex_y = abs(float(cash_y.get("Capital Expenditure", 0) or 0))
+            depreciation_y = float(cash_y.get("Depreciation And Amortization", 0) or 0)
+            if math.isnan(capex_y):
+                capex_y = 0
+            if math.isnan(depreciation_y):
+                depreciation_y = 0
+
+
+            reinvestment_y = capex_y - depreciation_y
+            if reinvestment_y < 0:
+                reinvestment_y = 0
+
+            rate_y = reinvestment_y / nopat_y
+            reinvestment_rates.append(rate_y)
+        except Exception:
+            # Skip years where data is malformed; don't fail the whole calc
+            continue
+
+    # ── Combine years: weighted average with median floor ──
+    # The weighted average tracks trends — for companies steadily ramping
+    # reinvestment (MSFT, GOOGL during AI buildout), recent years should
+    # count more than old ones. The median acts as a sanity floor — if the
+    # latest year is an outlier spike, the median prevents the weighted
+    # average from being dominated by it.
+    #
+    # Formula: max(median, weighted_average)
+    # where weighted_average = 0.5×latest + 0.3×year_-1 + 0.2×year_-2
+    #
+    # The max is taking the more aggressive of the two estimates, which
+    # is the right direction for trend-aware reinvestment (we'd rather
+    # over-estimate growth and let other model components push back than
+    # systematically under-estimate it).
+    if len(reinvestment_rates) >= 3:
+        # Sort and pick median
+        sorted_rates = sorted(reinvestment_rates)
+        n = len(sorted_rates)
+        if n % 2 == 1:
+            median_rate = sorted_rates[n // 2]
+        else:
+            median_rate = (sorted_rates[n // 2 - 1] + sorted_rates[n // 2]) / 2
+
+        # Weighted average — uses latest 3 years (most recent first)
+        # reinvestment_rates is in yfinance order: index 0 = latest
+        if len(reinvestment_rates) >= 3:
+            weighted_avg = (
+                    0.5 * reinvestment_rates[0]
+                    + 0.3 * reinvestment_rates[1]
+                    + 0.2 * reinvestment_rates[2]
+            )
+        else:
+            weighted_avg = sum(reinvestment_rates) / len(reinvestment_rates)
+
+        chosen_rate = max(median_rate, weighted_avg)
+
+        # Diagnostic flag so we can see which signal won
+        if weighted_avg > median_rate:
+            reinvestment_rate_method = f"weighted_avg_3y ({weighted_avg * 100:.1f}% > median {median_rate * 100:.1f}%)"
+        else:
+            reinvestment_rate_method = f"median_{n}y ({median_rate * 100:.1f}% ≥ weighted_avg {weighted_avg * 100:.1f}%)"
+
+        median_reinvestment_rate = chosen_rate
+    elif len(reinvestment_rates) >= 1:
+        # Not enough years for the weighted formula — fall back to mean
+        median_reinvestment_rate = sum(reinvestment_rates) / len(reinvestment_rates)
+        reinvestment_rate_method = f"mean_{len(reinvestment_rates)}y_insufficient"
+        data_flags.append(
+            f"Only {len(reinvestment_rates)} years of reinvestment data — using mean instead of weighted/median"
+        )
+    else:
+        # Fall back to latest-year computation if we couldn't build any history
+        data_flags.append("Could not compute reinvestment rate history — falling back to TTM")
+        capex_latest = abs(float(latest_cash.get("Capital Expenditure", 0) or 0))
+        depreciation_latest = float(latest_cash.get("Depreciation And Amortization", 0) or 0)
+        if math.isnan(capex_latest):
+            capex_latest = 0
+        if math.isnan(depreciation_latest):
+            depreciation_latest = 0
+        reinvestment_latest = capex_latest - depreciation_latest
+        if reinvestment_latest < 0:
+            reinvestment_latest = 0
+        median_reinvestment_rate = reinvestment_latest / ebit_after_tax if ebit_after_tax > 0 else 0
+        reinvestment_rate_method = "fallback_ttm"
+
+    # ── Compute fundamental growth ──
+    # Use ex-goodwill ROIC for the signal (operating economics of next dollar),
+    # but keep "roic" itself unchanged for downstream pipeline use.
     if invested_capital_ex_goodwill > 0:
         roic_for_growth = ebit_after_tax / invested_capital_ex_goodwill
     else:
         roic_for_growth = roic
-    fundamental_growth = reinvestment_rate * roic_for_growth
+
+    fundamental_growth = median_reinvestment_rate * roic_for_growth
 
     if goodwill > 0 and abs(roic_for_growth - roic) / max(roic, 0.01) > 0.2:
         data_flags.append(
@@ -621,8 +710,10 @@ def compute_fundamental_growth(ticker):
 
     return {
         "ebit_after_tax": ebit_after_tax,
-        "reinvestment": reinvestment,
-        "reinvestment_rate": reinvestment_rate,
+        "reinvestment": None,  # not meaningful when normalized
+        "reinvestment_rate": median_reinvestment_rate,
+        "reinvestment_rate_history": reinvestment_rates,
+        "reinvestment_rate_method": reinvestment_rate_method,
         "invested_capital": invested_capital,
         "roic": roic,
         "roic_ex_goodwill": roic_for_growth if invested_capital_ex_goodwill > 0 else None,
@@ -632,7 +723,6 @@ def compute_fundamental_growth(ticker):
         "tax_rate": tax_rate,
         "data_flags": data_flags,
     }
-
 
 def compute_historical_growth(ticker, years=5):
     """
