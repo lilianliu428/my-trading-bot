@@ -21,7 +21,13 @@ from valuation.tech.shared.sbc_dilution import project_share_count
 MAX_REINV = 0.80
 
 
-def compute_tech_intrinsic_value(ticker, bucket=None):
+def compute_tech_intrinsic_value(
+    ticker,
+    bucket=None,
+    initial_growth_override=None,
+    high_growth_years_override=None,
+    terminal_growth_override=None,
+):
     """
     Tech-specific DCF entry point.
 
@@ -81,7 +87,14 @@ def compute_tech_intrinsic_value(ticker, bucket=None):
     # Use the generic growth profile to get growth rates, transition logic,
     # boom detection, etc. Then we'll override the ROIC values for stage 1
     # and re-derive fundamental growth using ex-goodwill ROIC.
-    growth = build_growth_profile(ticker, wacc, bucket=bucket)
+    growth = build_growth_profile(
+        ticker,
+        wacc,
+        bucket=bucket,
+        initial_growth_override=initial_growth_override,
+        high_growth_years_override=high_growth_years_override,
+        terminal_growth_override=terminal_growth_override,
+    )
     data_flags.extend(growth.get("data_flags", []))
 
     # Override fundamental growth using ex-goodwill ROIC

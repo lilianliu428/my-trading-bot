@@ -918,7 +918,13 @@ def get_consensus_growth(ticker):
     }
 
 
-def build_growth_profile(ticker, wacc, bucket="default"):
+def build_growth_profile(ticker,
+    wacc,
+    bucket="default",
+    initial_growth_override=None,
+    high_growth_years_override=None,
+    terminal_growth_override=None,
+    ):
     """
     Build three-stage growth profile per Damodaran's framework.
 
@@ -1150,6 +1156,28 @@ def build_growth_profile(ticker, wacc, bucket="default"):
                     high_growth_years = cycle_max_runway
             except Exception as e:
                 data_flags.append(f"Semi cycle classifier failed: {e}; using generic runway.")
+    # ─────────────────────────────────────────────────────────────────────
+    # Scenario overrides — when scenario-weighted DCF is calling us, the
+    # scenario specifies the growth path explicitly. Bypass our blended
+    # estimates and use what the caller asked for.
+    # ─────────────────────────────────────────────────────────────────────
+    if initial_growth_override is not None:
+        data_flags.append(
+            f"Scenario override: initial_growth {initial_g * 100:.2f}% → {initial_growth_override * 100:.2f}%"
+        )
+        initial_g = initial_growth_override
+
+    if high_growth_years_override is not None:
+        data_flags.append(
+            f"Scenario override: high_growth_years {high_growth_years} → {high_growth_years_override}"
+        )
+        high_growth_years = high_growth_years_override
+
+    if terminal_growth_override is not None:
+        data_flags.append(
+            f"Scenario override: terminal_growth {terminal_g * 100:.2f}% → {terminal_growth_override * 100:.2f}%"
+        )
+        terminal_g = terminal_growth_override
     # Build the year-by-year arrays
     yearly_growth = []
     yearly_roic = []
@@ -1163,12 +1191,24 @@ def build_growth_profile(ticker, wacc, bucket="default"):
     if stage1_roic > 0:
         desired_reinv = stage1_g / stage1_roic
         if desired_reinv > MAX_REINV:
-            stage1_g = MAX_REINV * stage1_roic
-            stage1_reinv = MAX_REINV
-            data_flags.append(
-                f"Reinvestment capped at {MAX_REINV*100:.0f}% — growth reduced from "
-                f"{initial_g*100:.1f}% to {stage1_g*100:.1f}% (ROIC={stage1_roic*100:.1f}% is binding)"
-            )
+            if initial_growth_override is not None:
+                # Scenario-asserted growth: trust the caller. The scenario
+                # represents a forward state where economics differ from current.
+                # Allow reinvestment above MAX_REINV but flag it so it's visible.
+                stage1_reinv = min(desired_reinv, 1.0)  # hard cap at 100%
+                data_flags.append(
+                    f"Scenario growth {stage1_g * 100:.1f}% requires reinvestment "
+                    f"of {desired_reinv * 100:.0f}% (current ROIC={stage1_roic * 100:.1f}%). "
+                    f"Cap bypassed because scenario explicitly asserted this growth path."
+                )
+            else:
+                # Normal path: cap growth to stay within reinvestment limits
+                stage1_g = MAX_REINV * stage1_roic
+                stage1_reinv = MAX_REINV
+                data_flags.append(
+                    f"Reinvestment capped at {MAX_REINV * 100:.0f}% — growth reduced from "
+                    f"{initial_g * 100:.1f}% to {stage1_g * 100:.1f}% (ROIC={stage1_roic * 100:.1f}% is binding)"
+                )
         else:
             stage1_reinv = desired_reinv
     else:
