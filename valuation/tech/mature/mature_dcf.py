@@ -27,6 +27,7 @@ def compute_tech_intrinsic_value(
     initial_growth_override=None,
     high_growth_years_override=None,
     terminal_growth_override=None,
+    layer_1_mode=False,
 ):
     """
     Tech-specific DCF entry point.
@@ -94,6 +95,7 @@ def compute_tech_intrinsic_value(
         initial_growth_override=initial_growth_override,
         high_growth_years_override=high_growth_years_override,
         terminal_growth_override=terminal_growth_override,
+        layer_1_mode=layer_1_mode,
     )
     data_flags.extend(growth.get("data_flags", []))
 

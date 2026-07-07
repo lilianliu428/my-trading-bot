@@ -924,6 +924,7 @@ def build_growth_profile(ticker,
     initial_growth_override=None,
     high_growth_years_override=None,
     terminal_growth_override=None,
+    layer_1_mode=False,
     ):
     """
     Build three-stage growth profile per Damodaran's framework.
@@ -1006,24 +1007,37 @@ def build_growth_profile(ticker,
         # financing/investing sections, not capex. Replace fundamental_growth signal
         # with historical revenue growth as a proxy for M&A-driven growth dynamics.
         # This is a deliberate methodology choice for acquirers; see model docs.
-        hist_revenue = compute_historical_revenue_growth(ticker)
-        data_flags.extend(hist_revenue["data_flags"])
-        if hist_revenue["growth_rate"] is not None:
-            old_fund_g = fund_g
-            fund_g = hist_revenue["growth_rate"]
+        #
+        # Layer 1 mode: skip this override. Historical revenue growth for heavy
+        # acquirers captures past M&A wins (exercised optionality). Pure Layer 1
+        # should reflect only current operations, so use fundamental formula.
+        # M&A optionality can be added explicitly in Layer 2 (real options).
+        if layer_1_mode:
             data_flags.append(
-                f"Heavy-acquirer fundamental override: "
-                f"reinv×ROIC formula gave {old_fund_g * 100:.1f}% "
-                f"(undercounts M&A-driven growth). "
-                f"Replaced with historical revenue growth "
-                f"({fund_g * 100:.1f}%, R²={hist_revenue['r_squared']:.2f})."
+                "Layer 1 mode: skipping heavy-acquirer historical revenue override. "
+                f"Using pure fundamental growth ({fund_g * 100:.1f}%)."
             )
+            hist_revenue = None
         else:
-            data_flags.append(
-                "Heavy-acquirer fundamental override unavailable: "
-                "historical revenue growth could not be computed; "
-                f"falling back to formula value {fund_g * 100:.1f}%."
-            )
+            hist_revenue = compute_historical_revenue_growth(ticker)
+        if hist_revenue is not None:
+            data_flags.extend(hist_revenue["data_flags"])
+            if hist_revenue["growth_rate"] is not None:
+                old_fund_g = fund_g
+                fund_g = hist_revenue["growth_rate"]
+                data_flags.append(
+                    f"Heavy-acquirer fundamental override: "
+                    f"reinv×ROIC formula gave {old_fund_g * 100:.1f}% "
+                    f"(undercounts M&A-driven growth). "
+                    f"Replaced with historical revenue growth "
+                    f"({fund_g * 100:.1f}%, R²={hist_revenue['r_squared']:.2f})."
+                )
+            else:
+                data_flags.append(
+                    "Heavy-acquirer fundamental override unavailable: "
+                    "historical revenue growth could not be computed; "
+                    f"falling back to formula value {fund_g * 100:.1f}%."
+                )
 
     # === ROIC adjustment via history-aware regime detection + blending ===
     roic_history = compute_roic_history(ticker)
@@ -1046,7 +1060,17 @@ def build_growth_profile(ticker,
         effective_roic = current_roic
 
     # Initial growth = blend of fundamental, consensus, historical (70/20/10)
-    initial_g_raw = _blend_growth(fund_g, cons_g, hist_g, data_flags)
+    # Layer 1 mode: drop consensus signal. Analyst consensus prices in forward
+    # optionality (expected new products, market share gains, etc.) that belongs
+    # in Layer 2, not Layer 1. Use fundamental + historical only.
+    if layer_1_mode:
+        data_flags.append(
+            "Layer 1 mode: dropping consensus growth signal. "
+            f"Blending fundamental ({fund_g * 100:.1f}%) and historical ({hist_g * 100 if hist_g else 0:.1f}%) only."
+        )
+        initial_g_raw = _blend_growth(fund_g, None, hist_g, data_flags)
+    else:
+        initial_g_raw = _blend_growth(fund_g, cons_g, hist_g, data_flags)
 
     # Apply per-bucket initial growth cap
     bucket_cap = BUCKET_INITIAL_GROWTH_CAP.get(bucket, BUCKET_INITIAL_GROWTH_CAP["default"])
