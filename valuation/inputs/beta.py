@@ -10,7 +10,7 @@ Default window: 5 years of daily returns (Damodaran's preference).
 import sqlite3
 import numpy as np
 
-DB_PATH = "/home/ubuntu/my-trading-bot/data.db"  # server path
+from data_pipeline.database import DB_PATH
 
 
 def fetch_adj_close_series(ticker, db_path=DB_PATH):
